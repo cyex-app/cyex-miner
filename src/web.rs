@@ -11,8 +11,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Path, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    async_trait,
+    extract::{FromRequestParts, Path, Request, State},
+    http::{header, request::Parts, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -29,6 +30,7 @@ use crate::{
     auth::LoginPrompt,
     entities::streamer::{HistoryEntry, Source, Streamer},
     miner::{LogEvent, Miner},
+    priority::Priority,
     utils::random_alnum,
 };
 
@@ -104,7 +106,7 @@ pub async fn serve(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
         .route("/api/streamers/order", put(reorder))
         .route("/api/streamers/:id", delete(remove_streamer))
         .route("/api/streamers/:id/prioritize", put(set_prioritize))
-        .route("/api/settings/streak_first", put(set_streak_first))
+        .route("/api/settings/priority", put(set_priority))
         .route("/api/settings/paused", put(set_paused))
         .route("/api/auth/regenerate", post(regenerate_token))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -195,6 +197,7 @@ struct StreamerView {
     game: Option<String>,
     viewers: i64,
     minutes_watched: f64,
+    watch_streak: Option<u32>,
     history: BTreeMap<String, HistoryEntry>,
 }
 
@@ -215,6 +218,7 @@ impl StreamerView {
             viewers: st.stream.viewers_count,
             // Whole minutes, so the live stream only sends an update when the number shown changes.
             minutes_watched: st.stream.minute_watched.floor(),
+            watch_streak: st.watch_streak,
             history: st.history.clone(),
         }
     }
@@ -226,7 +230,7 @@ struct Status {
     user: Option<String>,
     login_prompt: Option<LoginPrompt>,
     started_at: Option<f64>,
-    streak_first: bool,
+    priority: Vec<Priority>,
     paused: bool,
     streamers: Vec<StreamerView>,
     /// Only in `/api/status`; the live stream sends events separately.
@@ -242,7 +246,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             user: Some(miner.twitch.creds.login.clone()),
             login_prompt,
             started_at: Some(miner.started_at),
-            streak_first: miner.streak_first(),
+            priority: miner.priority(),
             paused: miner.paused(),
             streamers: miner.streamers().iter().map(|s| StreamerView::new(s)).collect(),
             events: with_events.then(|| miner.events()),
@@ -252,7 +256,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             user: None,
             login_prompt,
             started_at: None,
-            streak_first: false,
+            priority: Vec::new(),
             paused: false,
             streamers: Vec::new(),
             events: with_events.then(Vec::new),
@@ -338,25 +342,36 @@ fn error(status: StatusCode, message: impl ToString) -> Response {
     (status, Json(json!({ "error": message.to_string() }))).into_response()
 }
 
+/// The running miner, for handlers that need it; answers 503 while it's still logging in.
+struct Ready(Arc<Miner>);
+
+#[async_trait]
+impl FromRequestParts<Arc<AppState>> for Ready {
+    type Rejection = Response;
+
+    async fn from_request_parts(_: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+        state
+            .miner
+            .get()
+            .cloned()
+            .map(Ready)
+            .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in"))
+    }
+}
+
 #[derive(Deserialize)]
 struct AddStreamer {
     username: String,
 }
 
-async fn add_streamer(State(state): State<Arc<AppState>>, Json(body): Json<AddStreamer>) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
+async fn add_streamer(Ready(miner): Ready, Json(body): Json<AddStreamer>) -> Response {
     match miner.add_streamer(&body.username).await {
         Ok(streamer) => Json(StreamerView::new(&streamer)).into_response(),
         Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
 }
 
-async fn remove_streamer(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
+async fn remove_streamer(Ready(miner): Ready, Path(id): Path<String>) -> Response {
     match miner.remove_streamer(&id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(StatusCode::NOT_FOUND, format!("{e:#}")),
@@ -368,14 +383,7 @@ struct SetPrioritize {
     prioritize: bool,
 }
 
-async fn set_prioritize(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(body): Json<SetPrioritize>,
-) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
+async fn set_prioritize(Ready(miner): Ready, Path(id): Path<String>, Json(body): Json<SetPrioritize>) -> Response {
     match miner.set_prioritized(&id, body.prioritize) {
         Ok(streamer) => Json(StreamerView::new(&streamer)).into_response(),
         Err(e) => error(StatusCode::NOT_FOUND, format!("{e:#}")),
@@ -383,16 +391,16 @@ async fn set_prioritize(
 }
 
 #[derive(Deserialize)]
-struct SetStreakFirst {
-    enabled: bool,
+struct SetPriority {
+    /// Most important first.
+    rules: Vec<Priority>,
 }
 
-async fn set_streak_first(State(state): State<Arc<AppState>>, Json(body): Json<SetStreakFirst>) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
-    miner.set_streak_first(body.enabled);
-    StatusCode::NO_CONTENT.into_response()
+async fn set_priority(Ready(miner): Ready, Json(body): Json<SetPriority>) -> Response {
+    match miner.set_priority(body.rules) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -400,10 +408,7 @@ struct SetPaused {
     paused: bool,
 }
 
-async fn set_paused(State(state): State<Arc<AppState>>, Json(body): Json<SetPaused>) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
+async fn set_paused(Ready(miner): Ready, Json(body): Json<SetPaused>) -> Response {
     miner.set_paused(body.paused);
     StatusCode::NO_CONTENT.into_response()
 }
@@ -414,10 +419,7 @@ struct Reorder {
     ids: Vec<String>,
 }
 
-async fn reorder(State(state): State<Arc<AppState>>, Json(body): Json<Reorder>) -> Response {
-    let Some(miner) = state.miner.get() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "The miner is still logging in");
-    };
+async fn reorder(Ready(miner): Ready, Json(body): Json<Reorder>) -> Response {
     match miner.reorder(&body.ids) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),

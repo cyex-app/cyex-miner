@@ -3,20 +3,9 @@ use std::{fs, path::Path};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::entities::streamer::StreamerSettings;
+use crate::{entities::streamer::StreamerSettings, priority::Priority};
 
 pub const EXAMPLE_CONFIG: &str = include_str!("../config.example.toml");
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Priority {
-    Order,
-    Streak,
-    Drops,
-    Subscribed,
-    PointsAscending,
-    PointsDescending,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -103,10 +92,8 @@ fn merge(base: &mut serde_json::Value, patch: serde_json::Value) {
 pub struct Config {
     pub username: String,
     pub claim_drops_startup: bool,
+    /// Only read until the watch priority is first saved in the web UI.
     pub priority: Vec<Priority>,
-    /// Streams whose watch streak isn't earned yet always get a watch slot first,
-    /// ahead of prioritized channels and `priority`.
-    pub streak_first: bool,
     pub followers: bool,
     pub followers_order: FollowersOrder,
     /// Only read once, to import into the database.
@@ -122,8 +109,7 @@ impl Default for Config {
         Self {
             username: String::new(),
             claim_drops_startup: false,
-            priority: vec![Priority::Streak, Priority::Drops, Priority::Order],
-            streak_first: false,
+            priority: vec![Priority::Prioritized, Priority::Streak, Priority::Drops, Priority::Order],
             followers: false,
             followers_order: FollowersOrder::Asc,
             blacklist: Vec::new(),

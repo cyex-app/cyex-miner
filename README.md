@@ -37,9 +37,12 @@ that changes its name keeps its place, star and settings: logins are refreshed f
 the web UI:
 
 - **Add** a channel by name or URL. It goes to the end of the list.
-- **Drag** the ⠿ handle to reorder (or focus it and use the arrow keys). Higher channels win when picking
-  what to watch for the `ORDER` priority, and when more than 2 starred channels are live.
-- **Star** a channel to always give it a watch slot while it's live.
+- **Drag** the handle to reorder (or focus it and use the arrow keys). Higher channels win ties in every
+  watch priority rule, and the `ORDER` rule follows the list. The number in front of each channel is its
+  place in the list.
+- **Sort** the table by points, points gained this session, minutes watched or watch streak. Sorting only
+  changes the view; reordering works in list order.
+- **Star** a channel to give it a watch slot through the `PRIORITIZED` rule.
 - **Remove** a channel. It's also blacklisted so it doesn't come back from your follow list; adding it again
   un-blacklists it.
 
@@ -75,14 +78,13 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
 
 ## Features
 
-- Watches up to 2 channels at a time (Twitch's limit), picked by `priority`: `STREAK`, `DROPS`, `ORDER`,
-  `SUBSCRIBED`, `POINTS_ASCENDING`, `POINTS_DESCENDING`
-- Prioritized channels (star in the UI, or `prioritize = true` per channel) always get a watch slot when
-  live, ahead of the `priority` rules, e.g. to build up watch time for a badge
-- `streak_first = true` puts streams whose watch streak isn't earned yet ahead of everything, even starred
-  channels, until the streak is claimed. It can also be switched on and off in the web UI (🔥 Streaks first);
-  the web UI setting is saved in the database and overrides the config from then on
-- Pause and resume mining from the web UI (⏸ Pause next to your name). While paused nothing is watched, chats are
+- Watches up to 2 channels at a time (Twitch's limit), picked by an ordered list of rules: `PRIORITIZED`
+  (starred channels), `STREAK`, `LONGEST_STREAK`, `DROPS`, `SUBSCRIBED`, `POINTS_ASCENDING`,
+  `POINTS_DESCENDING`, `ORDER`. Set them in the web UI under **Watch priority** (saved in the database, overrides
+  `priority` in the config from then on). For example `STREAK`, `ORDER` keeps every watch streak and otherwise
+  watches the top 2 live channels of the list
+- Shows the current watch streak of each channel
+- Pause and resume mining from the web UI (**Pause** next to your name). While paused nothing is watched, chats are
   left and no bonuses, drops, moments or raids are claimed; the pause is saved in the database and survives restarts
 - Claims bonus chests and moments, joins raids, keeps watch streaks
 - Drop campaigns: tracks progress and claims drops automatically (`claim_drops_startup` claims the inventory on start)
