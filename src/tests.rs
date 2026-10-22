@@ -1,10 +1,14 @@
-use serde_json::json;
+use std::sync::Arc;
+
+use serde_json::{json, Value};
 
 use crate::{
     config::{Config, EXAMPLE_CONFIG},
-    entities::streamer::{ChatPresence, Source},
+    entities::streamer::{ChatPresence, Source, Streamer, StreamerSettings},
+    priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
+    twitch::parse_watch_streak,
 };
 
 #[test]
@@ -12,6 +16,61 @@ fn example_config_parses() {
     let config: Config = toml::from_str(EXAMPLE_CONFIG).unwrap();
     assert_eq!(config.web.port, 5000);
     assert!(config.streamers.is_empty());
+    assert_eq!(config.priority, Config::default().priority);
+}
+
+/// A live channel whose watch streak is already earned.
+fn live(name: &str) -> Arc<Streamer> {
+    let s = Arc::new(Streamer::new(name.into(), name.into(), StreamerSettings::default(), Source::Manual));
+    {
+        let mut st = s.state();
+        st.is_online = true;
+        st.stream.watch_streak_missing = false;
+    }
+    s
+}
+
+fn names(watching: &[Arc<Streamer>]) -> Vec<&str> {
+    watching.iter().map(|s| s.username.as_str()).collect()
+}
+
+#[test]
+fn watches_the_top_of_the_list_once_streaks_are_earned() {
+    let list = [live("a"), live("b"), live("c"), live("d")];
+    // Drops exist for d's game, but none are left to earn.
+    list[3].state().stream.campaigns_ids = vec!["campaign".into()];
+    list[2].state().stream.watch_streak_missing = true;
+    let rules = [Priority::Streak, Priority::Drops, Priority::Order];
+    assert_eq!(names(&select_watching(&list, &rules)), ["c", "a"]);
+
+    list[2].state().stream.minute_watched = 7.0;
+    assert_eq!(names(&select_watching(&list, &rules)), ["a", "b"]);
+}
+
+#[test]
+fn rules_apply_in_order() {
+    let list = [live("a"), live("b"), live("c")];
+    list[2].state().prioritized = true;
+    list[0].state().watch_streak = Some(3);
+    list[1].state().watch_streak = Some(12);
+    assert_eq!(names(&select_watching(&list, &[Priority::Prioritized, Priority::LongestStreak])), ["c", "b"]);
+    assert_eq!(names(&select_watching(&list, &[Priority::LongestStreak])), ["b", "a"]);
+
+    for (s, points) in list.iter().zip([500, 100, 900]) {
+        s.state().channel_points = points;
+    }
+    assert_eq!(names(&select_watching(&list, &[Priority::PointsAscending])), ["b", "a"]);
+    assert_eq!(names(&select_watching(&list, &[Priority::PointsDescending])), ["c", "a"]);
+}
+
+#[test]
+fn parses_watch_streak() {
+    let resp = |value: Value| {
+        json!({ "data": { "channel": { "self": { "watchStreakMilestone": { "watchStreakMilestone": { "value": value } } } } } })
+    };
+    assert_eq!(parse_watch_streak(&resp(json!("7"))), Some(7));
+    assert_eq!(parse_watch_streak(&resp(json!(3))), Some(3));
+    assert_eq!(parse_watch_streak(&json!({ "data": { "channel": { "self": null } } })), None);
 }
 
 #[test]

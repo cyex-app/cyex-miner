@@ -74,6 +74,8 @@ pub struct StreamerState {
     pub watching: bool,
     /// Starts as `settings.prioritize`, can be toggled from the web UI.
     pub prioritized: bool,
+    /// The current watch streak on this channel, `None` until Twitch reported one.
+    pub watch_streak: Option<u32>,
 }
 
 impl StreamerState {
@@ -137,11 +139,27 @@ impl Streamer {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Live on a game with drop campaigns available on this channel, finished or not.
     pub fn drops_condition(&self) -> bool {
         let state = self.state();
         self.settings.claim_drops && state.is_online && !state.stream.campaigns_ids.is_empty()
     }
 
+    /// Live with drops left to earn: a campaign for the current game with unclaimed drops.
+    pub fn has_unclaimed_drops(&self) -> bool {
+        self.drops_condition() && !self.state().stream.campaigns.is_empty()
+    }
+
+    /// Whether this stream still needs watching to earn its watch streak: the streak isn't
+    /// claimed, the stream started more than 30 minutes after the previous one ended, and less
+    /// than ~7 minutes of it were watched.
+    pub fn streak_missing(&self) -> bool {
+        let st = self.state();
+        self.settings.watch_streak
+            && st.stream.watch_streak_missing
+            && (st.offline_at == 0.0 || (now() - st.offline_at) / 60.0 > 30.0)
+            && st.stream.minute_watched < 7.0
+    }
 }
 
 impl std::fmt::Display for Streamer {

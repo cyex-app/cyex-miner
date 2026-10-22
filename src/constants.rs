@@ -76,6 +76,11 @@ pub const GET_ID_FROM_LOGIN: Op = Op(
     "GetIDFromLogin",
     "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca",
 );
+/// The viewer's rewards on a channel, including the current watch streak.
+pub const REWARD_LIST: Op = Op(
+    "RewardList",
+    "0b1471876d7647993731b9e3c6a13bf304c67fb31d07f06a945d42286ee377c4",
+);
 pub const CHANNEL_FOLLOWS: Op = Op(
     "ChannelFollows",
     "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907",

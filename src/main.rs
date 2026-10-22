@@ -4,6 +4,7 @@ mod config;
 mod constants;
 mod entities;
 mod miner;
+mod priority;
 mod pubsub;
 mod store;
 #[cfg(test)]

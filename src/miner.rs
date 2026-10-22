@@ -18,20 +18,22 @@ use tracing::{debug, info, warn};
 
 use crate::{
     chat::ChatManager,
-    config::{merge_settings, Config, Priority},
-    entities::{
-        drops::{Campaign, Drop},
-        streamer::{ChatPresence, Source, Streamer},
-    },
-    pubsub::{PubSubMessage, PubSubPool},
+    config::{merge_settings, Config},
+    entities::streamer::{ChatPresence, Source, Streamer},
+    priority::{self, Priority},
+    pubsub::PubSubPool,
     store::{ChannelRow, Store},
     twitch::{PointsContext, StreamInfo, Twitch},
-    utils::{millify, now, random_between},
+    utils::{millify, now},
 };
 
-const MAX_WATCHING: usize = 2;
-/// `meta` key for the `streak_first` setting changed in the web UI, which overrides config.toml.
-const STREAK_FIRST_KEY: &str = "streak_first";
+mod drops;
+mod messages;
+
+/// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
+const PRIORITY_KEY: &str = "priority";
+/// `meta` key of the old "Streaks first" switch, only read to build the initial watch priority.
+const LEGACY_STREAK_FIRST_KEY: &str = "streak_first";
 /// `meta` key for whether mining was paused in the web UI.
 const PAUSED_KEY: &str = "paused";
 /// Recent events kept for web UI clients that connect later.
@@ -54,8 +56,8 @@ pub struct Miner {
     /// New events, pushed to connected web UI clients.
     events_tx: broadcast::Sender<LogEvent>,
     adding: Mutex<HashSet<String>>,
-    /// `streak_first` from config.toml, unless it was changed in the web UI.
-    streak_first: AtomicBool,
+    /// Rules for picking the channels to watch, see `load_priority`.
+    priority: RwLock<Vec<Priority>>,
     /// While paused nothing is watched, chats are left and nothing is claimed. PubSub stays
     /// connected so balances and live status stay current in the web UI.
     paused: AtomicBool,
@@ -64,6 +66,29 @@ pub struct Miner {
 
 fn valid_login(name: &str) -> bool {
     (1..=25).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The watch priority saved in the web UI, or else `priority` from config.toml.
+fn load_priority(config: &Config, store: &Store) -> Vec<Priority> {
+    match store.meta(PRIORITY_KEY) {
+        Ok(Some(saved)) => match serde_json::from_str(&saved) {
+            Ok(rules) => return rules,
+            Err(e) => warn!("Ignoring the saved watch priority: {e}"),
+        },
+        Ok(None) => {}
+        Err(e) => warn!("Could not read the watch priority: {e:#}"),
+    }
+    let mut rules = config.priority.clone();
+    // Before starred channels were a rule they always came first, unless the old "Streaks first"
+    // switch put watch streaks ahead of them.
+    if !rules.contains(&Priority::Prioritized) {
+        rules.insert(0, Priority::Prioritized);
+    }
+    if store.meta(LEGACY_STREAK_FIRST_KEY).ok().flatten().as_deref() == Some("1") {
+        rules.retain(|r| *r != Priority::Streak);
+        rules.insert(0, Priority::Streak);
+    }
+    priority::dedup(rules)
 }
 
 impl Miner {
@@ -75,14 +100,7 @@ impl Miner {
     ) -> Self {
         let token = twitch.creds.auth_token.clone();
         let chat = ChatManager::new(twitch.creds.login.clone(), token.clone());
-        let streak_first = match store.meta(STREAK_FIRST_KEY) {
-            Ok(Some(v)) => v == "1",
-            Ok(None) => config.streak_first,
-            Err(e) => {
-                warn!("Could not read the streak_first setting: {e:#}");
-                config.streak_first
-            }
-        };
+        let priority = load_priority(&config, &store);
         let paused = match store.meta(PAUSED_KEY) {
             Ok(v) => v.as_deref() == Some("1"),
             Err(e) => {
@@ -103,7 +121,7 @@ impl Miner {
             events: Mutex::new(VecDeque::new()),
             events_tx: broadcast::channel(256).0,
             adding: Mutex::new(HashSet::new()),
-            streak_first: AtomicBool::new(streak_first),
+            priority: RwLock::new(priority),
             paused: AtomicBool::new(paused),
             started_at: now(),
         }
@@ -472,6 +490,15 @@ impl Miner {
         for (streamer, claim_id) in claims {
             self.claim_bonus(streamer, &claim_id).await;
         }
+        self.refresh_watch_streaks(streamers).await;
+    }
+
+    async fn refresh_watch_streaks(&self, streamers: &[Arc<Streamer>]) {
+        let ids: Vec<String> = streamers.iter().map(|s| s.channel_id.clone()).collect();
+        let streaks = self.twitch.watch_streaks(&ids).await;
+        for (streamer, streak) in streamers.iter().zip(streaks) {
+            streamer.state().watch_streak = streak;
+        }
     }
 
     /// Starts mining a loaded streamer: PubSub topics and chat.
@@ -526,20 +553,23 @@ impl Miner {
         Ok(streamer)
     }
 
-    pub fn streak_first(&self) -> bool {
-        self.streak_first.load(Ordering::Relaxed)
+    pub fn priority(&self) -> Vec<Priority> {
+        self.priority.read().unwrap().clone()
     }
 
-    pub fn set_streak_first(&self, enabled: bool) {
-        self.streak_first.store(enabled, Ordering::Relaxed);
-        if let Err(e) = self.store.set_meta(STREAK_FIRST_KEY, if enabled { "1" } else { "0" }) {
-            warn!("Could not save the streak_first setting: {e:#}");
+    /// Replaces the watch priority. It's saved and overrides config.toml from then on.
+    pub fn set_priority(&self, rules: Vec<Priority>) -> Result<()> {
+        let rules = priority::dedup(rules);
+        if rules.is_empty() {
+            bail!("pick at least one rule");
         }
-        self.event(if enabled {
-            "Streams missing their watch streak are now watched first"
-        } else {
-            "Watch streaks no longer go ahead of everything else"
-        });
+        self.store
+            .set_meta(PRIORITY_KEY, &serde_json::to_string(&rules)?)
+            .context("could not save the watch priority")?;
+        let summary = rules.iter().map(|r| format!("{r:?}")).collect::<Vec<_>>().join(" > ");
+        *self.priority.write().unwrap() = rules;
+        self.event(format!("Watch priority: {summary}"));
+        Ok(())
     }
 
     pub fn paused(&self) -> bool {
@@ -684,6 +714,8 @@ impl Miner {
         let mut st = streamer.state();
         st.stream
             .update(info.broadcast_id, &info.title, info.game, info.viewers);
+        // Campaigns for a game the channel no longer plays would keep `has_unclaimed_drops` true.
+        st.stream.campaigns.retain(|c| campaigns_ids.contains(&c.id));
         st.stream.campaigns_ids = campaigns_ids;
         st.stream.payload = Some(json!([{ "event": "minute-watched", "properties": properties }]));
     }
@@ -718,74 +750,6 @@ impl Miner {
 
     // === Minute watched === //
 
-    fn select_watching(&self, candidates: &[Arc<Streamer>]) -> Vec<Arc<Streamer>> {
-        let mut selected: Vec<Arc<Streamer>> = Vec::new();
-        let take =|s: &Arc<Streamer>, selected: &mut Vec<Arc<Streamer>>| {
-            if selected.len() < MAX_WATCHING && !selected.iter().any(|x| Arc::ptr_eq(x, s)) {
-                selected.push(s.clone());
-            }
-        };
-        let now = now();
-        // Watch streak: be there for at least ~7 minutes of a stream that started
-        // more than 30 minutes after the previous one ended.
-        let streak_missing = |s: &Arc<Streamer>| {
-            let st = s.state();
-            s.settings.watch_streak
-                && st.stream.watch_streak_missing
-                && (st.offline_at == 0.0 || (now - st.offline_at) / 60.0 > 30.0)
-                && st.stream.minute_watched < 7.0
-        };
-        // With `streak_first`, streams whose streak isn't earned yet go ahead of everything else.
-        if self.streak_first() {
-            candidates
-                .iter()
-                .filter(|s| streak_missing(s))
-                .for_each(|s| take(s, &mut selected));
-        }
-        // Prioritized channels come first, in list order, ahead of the `priority` rules.
-        candidates
-            .iter()
-            .filter(|s| s.state().prioritized)
-            .for_each(|s| take(s, &mut selected));
-        for priority in &self.config.priority {
-            if selected.len() >= MAX_WATCHING {
-                break;
-            }
-            match priority {
-                Priority::Order => candidates.iter().for_each(|s| take(s, &mut selected)),
-                Priority::PointsAscending | Priority::PointsDescending => {
-                    let mut sorted: Vec<_> = candidates
-                        .iter()
-                        .map(|s| (s.state().channel_points, s))
-                        .collect();
-                    sorted.sort_by_key(|(points, _)| *points);
-                    if *priority == Priority::PointsDescending {
-                        sorted.reverse();
-                    }
-                    sorted.into_iter().for_each(|(_, s)| take(s, &mut selected));
-                }
-                Priority::Streak => candidates
-                    .iter()
-                    .filter(|s| streak_missing(s))
-                    .for_each(|s| take(s, &mut selected)),
-                Priority::Drops => candidates
-                    .iter()
-                    .filter(|s| s.drops_condition())
-                    .for_each(|s| take(s, &mut selected)),
-                Priority::Subscribed => {
-                    let mut with_multiplier: Vec<_> = candidates
-                        .iter()
-                        .map(|s| (s.state().total_multiplier(), s))
-                        .filter(|(m, _)| *m > 0.0)
-                        .collect();
-                    with_multiplier.sort_by(|a, b| b.0.total_cmp(&a.0));
-                    with_multiplier.into_iter().for_each(|(_, s)| take(s, &mut selected));
-                }
-            }
-        }
-        selected
-    }
-
     async fn watch_loop(self: Arc<Self>) {
         loop {
             if self.paused() {
@@ -810,7 +774,7 @@ impl Miner {
                 }
             }
 
-            let watching = self.select_watching(&candidates);
+            let watching = priority::select_watching(&candidates, &self.priority());
             for s in &streamers {
                 s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));
             }
@@ -875,228 +839,16 @@ impl Miner {
     async fn refresh_context_loop(self: Arc<Self>) {
         loop {
             tokio::time::sleep(Duration::from_secs(30 * 60)).await;
-            for s in self.streamers() {
+            let streamers = self.streamers();
+            for s in &streamers {
                 if s.state().is_online {
-                    if let Err(e) = self.load_points_context(&s).await {
+                    if let Err(e) = self.load_points_context(s).await {
                         warn!("Could not refresh channel points for {}: {e:#}", s.username);
                     }
                 }
             }
-        }
-    }
-
-    // === Drops === //
-
-    async fn claim_drop(&self, drop: &Drop) -> bool {
-        if self.paused() {
-            return false;
-        }
-        let Some(instance_id) = &drop.drop_instance_id else {
-            return false;
-        };
-        self.event(format!("Claim {drop}"));
-        self.twitch.claim_drop(instance_id).await
-    }
-
-    pub async fn claim_all_drops_from_inventory(&self) {
-        if self.paused() {
-            return;
-        }
-        let inventory = match self.twitch.inventory().await {
-            Ok(inv) => inv,
-            Err(e) => return warn!("Could not load the drops inventory: {e:#}"),
-        };
-        for campaign in inventory["dropCampaignsInProgress"].as_array().into_iter().flatten() {
-            for drop_json in campaign["timeBasedDrops"].as_array().into_iter().flatten() {
-                let Some(mut drop) = Drop::from_json(drop_json) else { continue };
-                drop.update(&drop_json["self"]);
-                if drop.is_claimable {
-                    drop.is_claimed = self.claim_drop(&drop).await;
-                    tokio::time::sleep(random_between(5.0, 10.0)).await;
-                }
-            }
-        }
-    }
-
-    async fn fetch_campaigns(&self) -> Result<Vec<Campaign>> {
-        let ids: Vec<String> = self
-            .twitch
-            .active_drop_campaigns()
-            .await?
-            .iter()
-            .filter_map(|c| c["id"].as_str().map(str::to_string))
-            .collect();
-        let details = self.twitch.campaign_details(&ids).await?;
-        Ok(details
-            .iter()
-            .filter_map(Campaign::from_json)
-            .filter(Campaign::dt_match)
-            .filter_map(|mut c| {
-                c.clear_drops();
-                (!c.drops.is_empty()).then_some(c)
-            })
-            .collect())
-    }
-
-    /// Updates drop progress from the inventory and claims whatever is ready.
-    async fn sync_campaigns(&self, campaigns: &mut [Campaign], inventory: &Value) {
-        let Some(in_progress) = inventory["dropCampaignsInProgress"].as_array() else {
-            return;
-        };
-        for campaign in campaigns.iter_mut() {
-            campaign.clear_drops();
-            let Some(progress) = in_progress
-                .iter()
-                .find(|p| p["id"].as_str() == Some(campaign.id.as_str()))
-            else {
-                continue;
-            };
-            campaign.in_inventory = true;
-            for drop_json in progress["timeBasedDrops"].as_array().into_iter().flatten() {
-                let Some(drop) = campaign
-                    .drops
-                    .iter_mut()
-                    .find(|d| drop_json["id"].as_str() == Some(d.id.as_str()))
-                else {
-                    continue;
-                };
-                drop.update(&drop_json["self"]);
-                if drop.is_claimable {
-                    drop.is_claimed = self.claim_drop(drop).await;
-                }
-            }
-            campaign.clear_drops();
-        }
-    }
-
-    async fn campaigns_loop(self: Arc<Self>) {
-        let mut campaigns: Vec<Campaign> = Vec::new();
-        let mut last_refresh = 0.0;
-        loop {
-            let streamers = self.streamers();
-            if !self.paused() && streamers.iter().any(|s| s.settings.claim_drops) {
-                if now() - last_refresh > 30.0 * 60.0 {
-                    last_refresh = now();
-                    self.claim_all_drops_from_inventory().await;
-                    match self.fetch_campaigns().await {
-                        Ok(c) => campaigns = c,
-                        Err(e) => warn!("Could not load drop campaigns: {e:#}"),
-                    }
-                }
-                match self.twitch.inventory().await {
-                    Ok(inventory) => self.sync_campaigns(&mut campaigns, &inventory).await,
-                    Err(e) => warn!("Error while syncing inventory: {e:#}"),
-                }
-                for s in streamers.iter().filter(|s| s.drops_condition()) {
-                    let mut st = s.state();
-                    let game_id = st.stream.game.as_ref().map(|g| g.id.clone()).unwrap_or_default();
-                    let matching = campaigns
-                        .iter()
-                        .filter(|c| {
-                            !c.drops.is_empty()
-                                && c.game_id == game_id
-                                && st.stream.campaigns_ids.contains(&c.id)
-                        })
-                        .cloned()
-                        .collect();
-                    st.stream.campaigns = matching;
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(60)).await;
-        }
-    }
-
-    // === PubSub === //
-
-    async fn dispatch_pubsub(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<String>) {
-        let mut last: Option<(String, String)> = None;
-        while let Some(raw) = rx.recv().await {
-            let Some(msg) = PubSubMessage::parse(&raw) else {
-                debug!("Unparseable PubSub message: {raw}");
-                continue;
-            };
-            // With several connections the same message may arrive twice.
-            let key = (msg.timestamp_raw.clone(), msg.identifier());
-            if last.as_ref() == Some(&key) {
-                continue;
-            }
-            last = Some(key);
-
-            let Some(streamer) = self.find_by_channel(&msg.channel_id) else {
-                continue;
-            };
-            self.handle_message(streamer, msg);
-        }
-    }
-
-    fn handle_message(self: &Arc<Self>, streamer: Arc<Streamer>, msg: PubSubMessage) {
-        let data = &msg.data;
-        match (msg.topic.as_str(), msg.kind.as_str()) {
-            ("community-points-user-v1", kind @ ("points-earned" | "points-spent")) => {
-                if let Some(balance) = data["balance"]["balance"].as_i64() {
-                    streamer.state().set_points(balance);
-                }
-                if kind == "points-earned" {
-                    let earned = data["point_gain"]["total_points"].as_i64().unwrap_or(0);
-                    let reason = data["point_gain"]["reason_code"].as_str().unwrap_or("UNKNOWN");
-                    streamer.state().update_history(reason, earned, 1);
-                    self.event(format!("+{earned} → {streamer} - Reason: {reason}."));
-                }
-            }
-            ("community-points-user-v1", "claim-available") => {
-                if let Some(claim_id) = data["claim"]["id"].as_str().map(str::to_string) {
-                    let miner = self.clone();
-                    tokio::spawn(async move { miner.claim_bonus(&streamer, &claim_id).await });
-                }
-            }
-            ("video-playback-by-id", "stream-up") => streamer.state().stream_up = now(),
-            ("video-playback-by-id", "stream-down") => {
-                if streamer.state().is_online {
-                    self.set_offline(&streamer);
-                }
-            }
-            ("video-playback-by-id", "viewcount") => {
-                if streamer.state().stream_up_elapsed() {
-                    let miner = self.clone();
-                    tokio::spawn(async move { miner.check_online(&streamer).await });
-                }
-            }
-            ("raid", "raid_update_v2") => {
-                let raid = &msg.message["raid"];
-                let (Some(raid_id), Some(target)) = (raid["id"].as_str(), raid["target_login"].as_str()) else {
-                    return;
-                };
-                if !streamer.settings.follow_raid || self.paused() {
-                    return;
-                }
-                {
-                    let mut st = streamer.state();
-                    if st.raid_id.as_deref() == Some(raid_id) {
-                        return;
-                    }
-                    st.raid_id = Some(raid_id.to_string());
-                }
-                self.event(format!("Joining raid from {streamer} to {target}!"));
-                let (miner, raid_id) = (self.clone(), raid_id.to_string());
-                tokio::spawn(async move {
-                    if let Err(e) = miner.twitch.join_raid(&raid_id).await {
-                        warn!("Joining raid failed: {e:#}");
-                    }
-                });
-            }
-            ("community-moments-channel-v1", "active") => {
-                let claim = streamer.settings.claim_moments && !self.paused();
-                if let (true, Some(moment_id)) = (claim, data["moment_id"].as_str()) {
-                    self.event(format!("Claiming the moment for {streamer}!"));
-                    let (miner, moment_id) = (self.clone(), moment_id.to_string());
-                    tokio::spawn(async move {
-                        if let Err(e) = miner.twitch.claim_moment(&moment_id).await {
-                            warn!("Moment claim failed: {e:#}");
-                        }
-                    });
-                }
-            }
-            _ => {}
+            // A missed stream resets a streak without any event, so check them all.
+            self.refresh_watch_streaks(&streamers).await;
         }
     }
 

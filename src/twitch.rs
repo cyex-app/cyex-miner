@@ -97,6 +97,15 @@ fn parse_campaign_ids(resp: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The current watch streak from a `RewardList` response. Twitch sends the count as a string.
+pub fn parse_watch_streak(resp: &Value) -> Option<u32> {
+    let value = &resp["data"]["channel"]["self"]["watchStreakMilestone"]["watchStreakMilestone"]["value"];
+    match value {
+        Value::String(s) => s.parse().ok(),
+        other => other.as_u64().and_then(|n| u32::try_from(n).ok()),
+    }
+}
+
 fn last_url_line(text: &str) -> Option<&str> {
     text.lines()
         .map(str::trim)
@@ -359,6 +368,19 @@ impl Twitch {
             .await
             .into_iter()
             .map(|r| r.map(|resp| parse_campaign_ids(&resp)).unwrap_or_default())
+            .collect()
+    }
+
+    /// The current watch streak on each channel; `None` where Twitch reported none or the lookup failed.
+    pub async fn watch_streaks(&self, channel_ids: &[String]) -> Vec<Option<u32>> {
+        let bodies = channel_ids
+            .iter()
+            .map(|id| REWARD_LIST.with(json!({ "channelID": id, "shouldIncludeAllSuspendedStreaks": false })))
+            .collect();
+        self.gql_batch(bodies)
+            .await
+            .into_iter()
+            .map(|r| r.ok().and_then(|resp| parse_watch_streak(&resp)))
             .collect()
     }
 
