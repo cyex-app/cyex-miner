@@ -9,6 +9,8 @@
     --bg: #f6f6f8; --panel: #ffffff; --text: #18181b; --muted: #6b6b76; --border: #e4e4e9;
     --accent: #9147ff; --accent-text: #ffffff; --live: #e91916; --ok: #1f9d55; --danger: #c62828;
     --row-hover: #f2f0fa; --star: #e8a400;
+    --radius: 6px; --radius-sm: 4px;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -24,78 +26,118 @@
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   h1 { font-size: 20px; margin: 0; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
   .muted { color: var(--muted); }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 16px; }
-  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
   .stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .stat .l { color: var(--muted); font-size: 12px; }
+
+  /* Controls */
   form { display: flex; gap: 8px; }
-  input[type=text], input[type=password] { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--bg); color: var(--text); font: inherit; }
+  input[type=text], input[type=password] { flex: 1; min-width: 0; padding: 9px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
   input[type=text]:focus, input[type=password]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  button { padding: 9px 16px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-text);
-    font: inherit; font-weight: 600; cursor: pointer; }
-  button:disabled { opacity: .6; cursor: wait; }
-  button.remove { background: transparent; color: var(--danger); border: 1px solid var(--border); padding: 5px 10px; font-weight: 500; }
-  button.remove:hover { border-color: var(--danger); }
+  button { padding: 9px 16px; border-radius: var(--radius-sm); border: 1px solid transparent; background: var(--accent);
+    color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer;
+    transition: transform 160ms var(--ease-out), border-color 150ms ease, color 150ms ease, background-color 150ms ease; }
+  button:active:not(:disabled):not(.handle) { transform: scale(.97); }
+  button:disabled { opacity: .6; cursor: default; }
+  button:focus-visible, select:focus-visible, input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
+  button.danger, button.remove { background: transparent; color: var(--danger); border-color: var(--border); font-weight: 500; }
+  button.remove { padding: 5px 10px; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+  button[aria-pressed="false"].lock, button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  button.icon { display: inline-grid; place-items: center; background: transparent; color: var(--muted); border: 0;
+    padding: 4px; line-height: 0; font-weight: 400; }
+  button.icon svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  select { padding: 4px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel);
+    color: var(--text); font: inherit; font-size: 12px; }
+  label.sort { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .msg { margin-top: 8px; min-height: 1.2em; font-size: 13px; }
   .msg.err { color: var(--danger); } .msg.ok { color: var(--ok); }
+  .hint { margin: -4px 0 10px; font-size: 12px; }
+  .warn { color: var(--star); }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .panel-head h2 { margin: 0; }
+  .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Channel table */
   table { width: 100%; border-collapse: collapse; }
   th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
   td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   tr:last-child td { border-bottom: 0; }
-  tbody tr:hover { background: var(--row-hover); }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .name { font-weight: 600; }
-  .name a { color: inherit; text-decoration: none; } .name a:hover { text-decoration: underline; }
+  td.pos, th.pos { width: 1%; color: var(--muted); }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .name a { color: inherit; text-decoration: none; }
+  .name-row { display: flex; align-items: flex-start; gap: 8px; }
+  .name-row > div { min-width: 0; }
   .sub { color: var(--muted); font-size: 12px; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; margin-left: 6px; vertical-align: 1px; }
+  .gain { color: var(--ok); }
+  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px;
+    vertical-align: 1px; white-space: nowrap; }
   .badge.live { background: var(--live); color: #fff; }
   .badge.watch { background: var(--accent); color: var(--accent-text); }
   .badge.prio { background: var(--star); color: #18181b; }
   .badge.follow { border: 1px solid var(--border); color: var(--muted); font-weight: 500; }
-  .gain { color: var(--ok); }
-  .name-row { display: flex; align-items: flex-start; gap: 8px; }
-  button.star { background: transparent; color: var(--muted); border: 0; padding: 0 2px; font-size: 18px; line-height: 1.2;
-    font-weight: 400; }
-  button.star:hover { color: var(--star); }
-  button.star.on { color: var(--star); }
-  .hint { margin: -4px 0 10px; font-size: 12px; }
-  td.grip { width: 28px; padding-left: 2px; padding-right: 0; }
-  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .panel-head h2 { margin: 0; }
-  button.lock { padding: 4px 10px; font-size: 12px; }
-  button.lock[aria-pressed="false"] { border-color: var(--accent); color: var(--accent); }
-  #channels.locked .grip { display: none; }
-  .head-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  button.toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  .header-right { display: flex; align-items: center; gap: 10px; }
   .badge.paused { background: var(--danger); color: #fff; margin-left: 0; }
-  button.handle { background: transparent; color: var(--muted); border: 0; padding: 2px 4px; font-size: 16px; line-height: 1.2;
-    font-weight: 400; cursor: grab; touch-action: none; border-radius: 6px; }
-  button.handle:hover, button.handle:focus-visible { color: var(--text); background: var(--row-hover); }
+  button.star { padding: 2px; flex-shrink: 0; }
+  button.star svg { stroke-width: 1.2; }
+  button.star.on { color: var(--star); }
+  button.star.on svg { fill: currentColor; }
+  .empty { text-align: center; color: var(--muted); padding: 24px; }
+
+  /* Drag to reorder */
+  td.grip { width: 28px; padding-left: 2px; padding-right: 0; }
+  #channels.no-reorder .grip { display: none; }
+  button.handle { cursor: grab; touch-action: none; padding: 4px 6px; }
+  button.handle svg { fill: currentColor; stroke: none; }
   tbody tr.dragging { position: relative; z-index: 2; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
   tbody tr.dragging td { background: var(--panel); }
   tbody tr.dragging button.handle { cursor: grabbing; color: var(--accent); }
   body.is-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
-  body.is-dragging tbody tr:hover { background: transparent; }
-  .warn { color: var(--star); }
-  .empty { text-align: center; color: var(--muted); padding: 24px; }
+
+  /* Watch priority editor */
+  .editor { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+  .editor p { margin: 0 0 10px; font-size: 12px; }
+  #rules { list-style: none; margin: 0 0 12px; padding: 0; }
+  .rule { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+  .rule:last-child { border-bottom: 0; }
+  .rule-n { width: 1.5em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .rule-body { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+  .rule-body input { margin: 3px 0 0; accent-color: var(--accent); flex-shrink: 0; }
+  .rule-name { display: block; font-weight: 600; }
+  .rule-desc { display: block; color: var(--muted); font-size: 12px; }
+  .rule.off .rule-name { color: var(--muted); font-weight: 500; }
+  .rule-move { display: flex; flex-shrink: 0; }
+
+  /* Activity, login, web access */
   #events { max-height: 340px; overflow-y: auto; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
   #events div { padding: 1px 0; } #events time { color: var(--muted); margin-right: 8px; }
   .login { text-align: center; padding: 28px 16px; }
   .login .code { font: 600 34px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .15em; margin: 12px 0; color: var(--accent); }
   .login a { color: var(--accent); }
   #auth form { max-width: 420px; margin: 14px auto 0; }
-  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-  button.secondary:hover { border-color: var(--muted); }
-  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); font-weight: 500; }
-  button.danger:hover { border-color: var(--danger); }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .token { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .token code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px;
-    background: var(--bg); border: 1px solid var(--border); font: 13px ui-monospace, Consolas, monospace; }
+  .token code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: var(--radius-sm);
+    background: var(--bg); border: 1px solid var(--border); font-size: 13px; }
+
+  @media (hover: hover) and (pointer: fine) {
+    body:not(.is-dragging) tbody tr:hover { background: var(--row-hover); }
+    .name a:hover { text-decoration: underline; }
+    button.secondary:hover { border-color: var(--muted); }
+    button.danger:hover, button.remove:hover { border-color: var(--danger); }
+    button.icon:hover:not(:disabled) { color: var(--text); background: var(--row-hover); }
+    button.star:hover { color: var(--star); background: transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button:active:not(:disabled) { transform: none; }
+  }
   @media (max-width: 640px) {
     .hide-sm { display: none; }
     .sub { max-width: 180px; }
@@ -108,8 +150,8 @@
     <h1>Points Miner</h1>
     <div class="header-right">
       <span id="user" class="muted">connecting…</span>
-      <button class="secondary lock" id="pause-btn" type="button" hidden
-        title="While paused nothing is watched, chats are left and no bonuses, drops or raids are claimed">⏸ Pause</button>
+      <button class="secondary small" id="pause-btn" type="button" hidden
+        title="While paused nothing is watched, chats are left and no bonuses, drops or raids are claimed">Pause</button>
     </div>
   </header>
 
@@ -146,18 +188,42 @@
       <div class="panel-head">
         <h2>Channels</h2>
         <div class="head-actions">
-          <button class="secondary lock toggle" id="streak-btn" type="button" aria-pressed="false"
-            title="Streams missing their watch streak get a watch slot before everything else, even starred channels">🔥 Streaks first: off</button>
-          <button class="secondary lock" id="lock-btn" type="button"></button>
+          <label class="sort">Sort
+            <select id="sort">
+              <option value="order">List order</option>
+              <option value="points-desc">Most points</option>
+              <option value="points-asc">Fewest points</option>
+              <option value="session-desc">Most gained this session</option>
+              <option value="session-asc">Least gained this session</option>
+              <option value="watched-desc">Most watched</option>
+              <option value="watched-asc">Least watched</option>
+              <option value="streak-desc">Longest watch streak</option>
+              <option value="streak-asc">Shortest watch streak</option>
+            </select>
+          </label>
+          <button class="secondary small" id="prio-btn" type="button" aria-expanded="false" aria-controls="prio-editor">Watch priority</button>
+          <button class="secondary small lock" id="lock-btn" type="button"></button>
         </div>
       </div>
-      <p class="hint muted" id="prio-hint">Unlock the order, then drag ⠿ to reorder: channels higher in the list are watched first (after
-        streaks and drops, as set by <code>priority</code> in the config). Star a channel to always give it one of the
-        2 watch slots while it's live, e.g. for a watch-time badge.</p>
+
+      <div class="editor" id="prio-editor" hidden>
+        <p class="muted">Twitch counts 2 streams at a time. The rules are tried from the top until both slots are
+          taken; channels higher in the list win ties. Untick a rule to skip it.</p>
+        <ol id="rules"></ol>
+        <div class="actions">
+          <button type="button" class="small" id="prio-save">Save</button>
+          <button type="button" class="secondary small" id="prio-cancel">Cancel</button>
+        </div>
+        <div id="prio-msg" class="msg"></div>
+      </div>
+
+      <p class="hint muted" id="prio-summary"></p>
+      <p class="hint muted" id="list-hint"></p>
       <table>
         <thead><tr>
-          <th class="grip"></th><th>Channel</th><th class="num">Points</th><th class="num">Session</th>
-          <th class="num hide-sm">Watched</th><th></th>
+          <th class="grip"></th><th class="num pos" title="Place in the list">#</th><th>Channel</th>
+          <th class="num">Points</th><th class="num">Session</th><th class="num hide-sm">Watched</th>
+          <th class="num hide-sm" title="Current watch streak">Streak</th><th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
@@ -190,14 +256,59 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const fmt = (n) => Number(n).toLocaleString();
 const signed = (n) => (n > 0 ? "+" : "") + fmt(n);
 const MAX_LOG_LINES = 300;
-const PRIO_HINT = $("prio-hint").textContent;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const SLIDE = "transform 160ms cubic-bezier(0.23, 1, 0.32, 1)";
+
+const ICON = {
+  grip: '<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><circle cx="3" cy="3" r="1.25"/><circle cx="7" cy="3" r="1.25"/>'
+    + '<circle cx="3" cy="8" r="1.25"/><circle cx="7" cy="8" r="1.25"/><circle cx="3" cy="13" r="1.25"/><circle cx="7" cy="13" r="1.25"/></svg>',
+  star: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">'
+    + '<path d="M8 1.6l1.95 3.95 4.35.63-3.15 3.07.74 4.33L8 11.53l-3.89 2.05.74-4.33L1.7 6.18l4.35-.63z"/></svg>',
+  up: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg>',
+  down: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>',
+};
+
+// Watch priority rules: [name, description]. The key order is the order unused rules are listed in.
+const RULES = {
+  PRIORITIZED: ["Starred channels", "Channels you starred."],
+  STREAK: ["Earn watch streaks", "Streams whose watch streak isn't earned yet (about 7 minutes per stream)."],
+  LONGEST_STREAK: ["Longest watch streak", "Channels with the longest current watch streak first."],
+  DROPS: ["Drops in progress", "Streams with unclaimed drops for the game being played."],
+  SUBSCRIBED: ["Points multiplier", "Channels with a points bonus, e.g. from a subscription. Highest first."],
+  POINTS_DESCENDING: ["Most channel points", "Channels where you have the most points first."],
+  POINTS_ASCENDING: ["Fewest channel points", "Channels where you have the fewest points first."],
+  ORDER: ["List order", "Channels higher in the list first."],
+};
+const ruleName = (rule) => RULES[rule]?.[0] ?? rule;
+
+// Values the table can be sorted by; `null` sorts last in both directions.
+const SORT_VALUE = {
+  points: (s) => s.points,
+  session: (s) => s.gained,
+  watched: (s) => (s.online ? s.minutes_watched : null),
+  streak: (s) => s.watch_streak,
+};
 
 let authed = null;
+let status = null;        // the last status from the server
 let drag = null;          // the row being dragged, see startDrag()
 let savingOrder = false;
-// Reordering is locked by default (remembered per browser), so a stray drag can't change the order.
+let draft = null;         // [{ rule, on }] while the watch priority editor is open
+// Reordering is locked by default, so a stray drag can't change the order. Both settings are per browser.
 let orderLocked = true;
-try { orderLocked = localStorage.getItem("orderLocked") !== "0"; } catch {}
+let sortKey = "order";
+try {
+  orderLocked = localStorage.getItem("orderLocked") !== "0";
+  sortKey = localStorage.getItem("sort") ?? "order";
+} catch {}
+if (![...$("sort").options].some((o) => o.value === sortKey)) sortKey = "order";
+
+const canReorder = () => !orderLocked && sortKey === "order";
+
+function showError(text) {
+  $("add-msg").className = "msg err";
+  $("add-msg").textContent = text;
+}
 
 function showAuth() {
   disconnect();
@@ -224,6 +335,15 @@ async function api(url, opts) {
   return res;
 }
 
+// PUT/POST a JSON body; throws the server's error message if it fails.
+async function send(method, url, body) {
+  const res = await api(url, {
+    method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res;
+}
+
 async function tryLogin(token) {
   const res = await fetch("api/login", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }),
@@ -238,81 +358,98 @@ function normalize(input) {
   return s.replace(/^@/, "").toLowerCase();
 }
 
-function renderRows(streamers) {
+// === Channel table === //
+
+// The channels with their place in the list (1-based), in the chosen sort order.
+function sortedRows(streamers) {
+  const rows = streamers.map((s, i) => ({ s, pos: i + 1 }));
+  if (sortKey === "order") return rows;
+  const [field, dir] = sortKey.split("-");
+  const value = SORT_VALUE[field];
+  return rows.sort((a, b) => {
+    const va = value(a.s), vb = value(b.s);
+    if (va == null || vb == null) return (va == null) - (vb == null) || a.pos - b.pos;
+    return (dir === "asc" ? va - vb : vb - va) || a.pos - b.pos;
+  });
+}
+
+function rowHtml({ s, pos }) {
+  const badges = (s.online ? '<span class="badge live">LIVE</span>' : "")
+    + (s.prioritized ? '<span class="badge prio">starred</span>' : "")
+    + (s.watching ? '<span class="badge watch">watching</span>' : "")
+    + (s.source === "followers" ? '<span class="badge follow">followed</span>' : "");
+  const sub = s.online
+    ? [s.game, s.title].filter(Boolean).join(" · ") + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
+    : "Offline";
+  const history = Object.entries(s.history).filter(([, h]) => h.counter)
+    .map(([k, h]) => `${k} ×${h.counter} (${signed(h.amount)})`).join(", ");
+  const star = s.prioritized ? "Unstar" : "Star";
+  return `<tr title="${esc(history)}" data-id="${esc(s.id)}">
+    <td class="grip"><button class="handle icon" title="Drag to reorder" aria-label="Move ${esc(s.username)} (arrow keys)">${ICON.grip}</button></td>
+    <td class="num pos">${pos}</td>
+    <td><div class="name-row">
+        <button class="star icon ${s.prioritized ? "on" : ""}" data-id="${esc(s.id)}" data-on="${s.prioritized ? 1 : 0}"
+          title="${s.prioritized ? "Unstar" : "Star: a watch slot through the Starred channels rule"}"
+          aria-label="${star} ${esc(s.username)}" aria-pressed="${s.prioritized}">${ICON.star}</button>
+        <div><div class="name"><a href="https://www.twitch.tv/${esc(s.username)}" target="_blank" rel="noopener">${esc(s.username)}</a>${badges}</div>
+        <div class="sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
+    <td class="num">${fmt(s.points)}</td>
+    <td class="num ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
+    <td class="num hide-sm">${s.online ? Math.floor(s.minutes_watched) + "m" : "–"}</td>
+    <td class="num hide-sm">${s.watch_streak ?? "–"}</td>
+    <td class="num"><button class="remove" data-id="${esc(s.id)}">Remove</button></td>
+  </tr>`;
+}
+
+function renderRows() {
   // Don't re-render under the user's pointer; the next refresh after the drop catches up.
-  if (drag || savingOrder) return;
+  if (drag || savingOrder || !status) return;
+  const streamers = status.streamers;
   if (!streamers.length) {
-    $("rows").innerHTML = '<tr><td colspan="6" class="empty">No channels yet. Add one above.</td></tr>';
+    $("rows").innerHTML = '<tr><td colspan="8" class="empty">No channels yet. Add one above.</td></tr>';
     return;
   }
   // Re-rendering replaces the buttons; keep keyboard focus on the same one.
   const focused = document.activeElement?.closest("#rows button");
   const focusedRow = focused?.closest("tr")?.dataset.id;
   const focusedKind = focused?.classList[0];
-  $("rows").innerHTML = streamers.map((s) => {
-    const badges = (s.online ? '<span class="badge live">LIVE</span>' : "")
-      + (s.prioritized ? '<span class="badge prio">priority</span>' : "")
-      + (s.watching ? '<span class="badge watch">watching</span>' : "")
-      + (s.source === "followers" ? '<span class="badge follow">followed</span>' : "");
-    const sub = s.online
-      ? esc([s.game, s.title].filter(Boolean).join(" · ")) + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
-      : "Offline";
-    const history = Object.entries(s.history).filter(([, h]) => h.counter)
-      .map(([k, h]) => `${k} ×${h.counter} (${signed(h.amount)})`).join(", ");
-    return `<tr title="${esc(history)}" data-id="${esc(s.id)}">
-      <td class="grip"><button class="handle" title="Drag to reorder" aria-label="Move ${esc(s.username)} (arrow keys)">⠿</button></td>
-      <td><div class="name-row">
-          <button class="star ${s.prioritized ? "on" : ""}" data-id="${esc(s.id)}" data-on="${s.prioritized ? 1 : 0}"
-            title="${s.prioritized ? "Stop prioritizing" : "Prioritize: always watch when live"}"
-            aria-label="${s.prioritized ? "Stop prioritizing" : "Prioritize"} ${esc(s.username)}">${s.prioritized ? "★" : "☆"}</button>
-          <div><div class="name"><a href="https://www.twitch.tv/${esc(s.username)}" target="_blank" rel="noopener">${esc(s.username)}</a>${badges}</div>
-          <div class="sub">${sub}</div></div></div></td>
-      <td class="num">${fmt(s.points)}</td>
-      <td class="num ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
-      <td class="num hide-sm">${s.online ? Math.floor(s.minutes_watched) + "m" : "–"}</td>
-      <td class="num"><button class="remove" data-id="${esc(s.id)}">Remove</button></td>
-    </tr>`;
-  }).join("");
+  $("rows").innerHTML = sortedRows(streamers).map(rowHtml).join("");
   if (focusedRow && focusedKind) {
     $("rows").querySelector(`tr[data-id="${CSS.escape(focusedRow)}"] button.${focusedKind}`)?.focus();
   }
 }
 
-function logLine(e) {
-  const div = document.createElement("div");
-  div.innerHTML = `<time>${new Date(e.ts * 1000).toLocaleTimeString()}</time>${esc(e.text)}`;
-  return div;
-}
-
-// The server sends the recent lines on connect (`log-init`), then each new one (`log`).
-function setLog(events) {
-  const box = $("events");
-  box.replaceChildren(...events.map(logLine));
-  box.scrollTop = box.scrollHeight;
-}
-
-function appendLog(e) {
-  const box = $("events");
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
-  box.append(logLine(e));
-  while (box.childElementCount > MAX_LOG_LINES) box.firstElementChild.remove();
-  if (atBottom) box.scrollTop = box.scrollHeight;
-}
-
-// One-off status fetch: right after an action (add, remove, ...) and to find out why the live
-// stream failed. Regular updates come from the stream.
-async function refresh() {
-  try {
-    const res = await fetch("api/status");
-    if (res.status === 401) return showAuth();
-    render(await res.json());
-  } catch (e) {
-    $("user").textContent = "connection lost, retrying…";
+function renderListHint() {
+  const liveStarred = status?.streamers.filter((s) => s.prioritized && s.online).length ?? 0;
+  const hint = $("list-hint");
+  const crowded = liveStarred > 2 && status.priority.includes("PRIORITIZED");
+  hint.classList.toggle("warn", crowded);
+  if (crowded) {
+    hint.textContent = `${liveStarred} starred channels are live, but Twitch only counts 2 at a time. The ones higher in the list win.`;
+  } else if (sortKey !== "order") {
+    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; switch back to "
+      + "List order to reorder.";
+  } else {
+    hint.textContent = orderLocked
+      ? "Unlock the order to drag channels into place. Higher channels win ties in every watch priority rule."
+      : "Drag the handle (or focus it and use the arrow keys) to reorder.";
   }
 }
 
+function applyReorderState() {
+  const btn = $("lock-btn");
+  $("channels").classList.toggle("no-reorder", !canReorder());
+  btn.textContent = orderLocked ? "Order locked" : "Order unlocked";
+  btn.title = orderLocked ? "Unlock to reorder channels by dragging" : "Lock the order so it can't be changed by accident";
+  btn.setAttribute("aria-pressed", String(orderLocked));
+  renderListHint();
+}
+
+// === Status === //
+
 function render(st) {
   authed = true;
+  status = st;
   $("auth").hidden = true;
   $("access").hidden = false;
   if (!st.ready) {
@@ -339,17 +476,44 @@ function render(st) {
   $("s-live").textContent = st.streamers.filter((s) => s.online).length;
   $("s-points").textContent = fmt(st.streamers.reduce((a, s) => a + s.points, 0));
   $("s-gained").textContent = signed(st.streamers.reduce((a, s) => a + s.gained, 0));
-  renderRows(st.streamers);
-  if (!$("streak-btn").disabled) renderStreakFirst(st.streak_first);
-  const liveStarred = st.streamers.filter((s) => s.prioritized && s.online).length;
-  const hint = $("prio-hint");
-  hint.classList.toggle("warn", liveStarred > 2);
-  if (liveStarred > 2) {
-    hint.textContent = `${liveStarred} prioritized channels are live, but Twitch only counts 2 at a time. `
-      + "The ones higher in the list win.";
-  } else {
-    hint.textContent = PRIO_HINT;
+  $("prio-summary").textContent = "Watching by: " + st.priority.map(ruleName).join(", then ") + ".";
+  renderRows();
+  renderListHint();
+}
+
+// One-off status fetch: right after an action (add, remove, ...) and to find out why the live
+// stream failed. Regular updates come from the stream.
+async function refresh() {
+  try {
+    const res = await fetch("api/status");
+    if (res.status === 401) return showAuth();
+    render(await res.json());
+  } catch (e) {
+    $("user").textContent = "connection lost, retrying…";
   }
+}
+
+// === Activity log === //
+
+function logLine(e) {
+  const div = document.createElement("div");
+  div.innerHTML = `<time>${new Date(e.ts * 1000).toLocaleTimeString()}</time>${esc(e.text)}`;
+  return div;
+}
+
+// The server sends the recent lines on connect (`log-init`), then each new one (`log`).
+function setLog(events) {
+  const box = $("events");
+  box.replaceChildren(...events.map(logLine));
+  box.scrollTop = box.scrollHeight;
+}
+
+function appendLog(e) {
+  const box = $("events");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+  box.append(logLine(e));
+  while (box.childElementCount > MAX_LOG_LINES) box.firstElementChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
 // === Live updates (Server-Sent Events) === //
@@ -391,6 +555,8 @@ document.addEventListener("visibilitychange", () => {
   else if (authed !== false) connect();
 });
 
+// === Channel actions === //
+
 $("add").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const username = normalize($("username").value);
@@ -399,11 +565,7 @@ $("add").addEventListener("submit", async (ev) => {
   btn.disabled = true;
   msg.className = "msg"; msg.textContent = `Adding ${username}…`;
   try {
-    const res = await api("api/streamers", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username }),
-    });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || res.statusText);
+    const body = await (await send("POST", "api/streamers", { username })).json();
     msg.className = "msg ok"; msg.textContent = `Added ${body.username}${body.online ? " (live now)" : ""}.`;
     $("username").value = "";
     refresh();
@@ -418,15 +580,8 @@ $("rows").addEventListener("click", async (ev) => {
   const star = ev.target.closest("button.star");
   if (star) {
     star.disabled = true;
-    const res = await api("api/streamers/" + encodeURIComponent(star.dataset.id) + "/prioritize", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prioritize: star.dataset.on !== "1" }),
-    }).catch(() => null);
-    if (!res) return;
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      $("add-msg").className = "msg err"; $("add-msg").textContent = body.error || "Update failed";
-    }
+    const url = "api/streamers/" + encodeURIComponent(star.dataset.id) + "/prioritize";
+    await send("PUT", url, { prioritize: star.dataset.on !== "1" }).catch((e) => showError(e.message));
     refresh();
     return;
   }
@@ -438,14 +593,24 @@ $("rows").addEventListener("click", async (ev) => {
     return;
   }
   btn.disabled = true;
-  const res = await api("api/streamers/" + encodeURIComponent(btn.dataset.id), { method: "DELETE" }).catch(() => null);
-  if (!res) return;
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    $("add-msg").className = "msg err"; $("add-msg").textContent = body.error || "Remove failed";
-  }
+  await send("DELETE", "api/streamers/" + encodeURIComponent(btn.dataset.id)).catch((e) => showError(e.message));
   refresh();
 });
+
+$("sort").value = sortKey;
+$("sort").addEventListener("change", () => {
+  sortKey = $("sort").value;
+  try { localStorage.setItem("sort", sortKey); } catch {}
+  applyReorderState();
+  renderRows();
+});
+
+$("lock-btn").addEventListener("click", () => {
+  orderLocked = !orderLocked;
+  try { localStorage.setItem("orderLocked", orderLocked ? "1" : "0"); } catch {}
+  applyReorderState();
+});
+applyReorderState();
 
 // === Drag to reorder === //
 // Pointer events (not HTML5 drag & drop) so it works with mouse, pen and touch alike. The dragged
@@ -466,13 +631,14 @@ function moveRow(row, before) {
   const others = [...rowsEl.children].filter((r) => r !== row);
   const firstTop = new Map(others.map((r) => [r, r.getBoundingClientRect().top]));
   rowsEl.insertBefore(row, before);
+  if (reduceMotion.matches) return;
   for (const r of others) {
     const dy = firstTop.get(r) - layoutTop(r);
     if (Math.abs(dy) < 1) continue;
     r.style.transition = "none";
     r.style.transform = `translateY(${dy}px)`;
     r.getBoundingClientRect(); // apply the start position before animating back
-    r.style.transition = "transform 160ms ease";
+    r.style.transition = SLIDE;
     r.style.transform = "";
   }
 }
@@ -520,12 +686,9 @@ function autoScroll() {
 async function saveOrder() {
   savingOrder = true;
   try {
-    const res = await api("api/streamers/order", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: rowOrder() }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Saving the order failed");
+    await send("PUT", "api/streamers/order", { ids: rowOrder() });
   } catch (e) {
-    $("add-msg").className = "msg err"; $("add-msg").textContent = e.message;
+    showError(e.message || "Saving the order failed");
   } finally {
     savingOrder = false;
     refresh();
@@ -538,7 +701,7 @@ function endDrag(cancelled) {
   drag = null;
   document.body.classList.remove("is-dragging");
   row.classList.remove("dragging");
-  row.style.transition = "transform 160ms ease"; // settle into its slot
+  row.style.transition = reduceMotion.matches ? "none" : SLIDE; // settle into its slot
   row.style.transform = "";
   setTimeout(() => {
     for (const r of rowsEl.children) r.style.transition = "";
@@ -552,7 +715,7 @@ function endDrag(cancelled) {
 
 rowsEl.addEventListener("pointerdown", (ev) => {
   const handle = ev.target.closest("button.handle");
-  if (handle && ev.button === 0 && !orderLocked && !drag && !savingOrder) startDrag(ev, handle);
+  if (handle && ev.button === 0 && canReorder() && !drag && !savingOrder) startDrag(ev, handle);
 });
 rowsEl.addEventListener("pointermove", (ev) => {
   if (!drag || ev.pointerId !== drag.pointerId) return;
@@ -568,7 +731,7 @@ rowsEl.addEventListener("pointercancel", (ev) => {
 // Keyboard: focus the handle and use the arrow keys.
 rowsEl.addEventListener("keydown", (ev) => {
   const handle = ev.target.closest("button.handle");
-  if (!handle || orderLocked || drag || savingOrder || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+  if (!handle || !canReorder() || drag || savingOrder || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
   ev.preventDefault();
   const row = handle.closest("tr");
   const target = ev.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling?.nextElementSibling ?? null;
@@ -579,65 +742,108 @@ rowsEl.addEventListener("keydown", (ev) => {
   saveOrder();
 });
 
-function renderStreakFirst(on) {
-  const btn = $("streak-btn");
-  btn.setAttribute("aria-pressed", String(on));
-  btn.textContent = `🔥 Streaks first: ${on ? "on" : "off"}`;
+// === Watch priority editor === //
+
+function renderRules() {
+  let rank = 0;
+  $("rules").innerHTML = draft.map(({ rule, on }, i) => {
+    const [name, desc] = RULES[rule] ?? [rule, ""];
+    return `<li class="rule ${on ? "" : "off"}" data-i="${i}">
+      <span class="rule-n">${on ? ++rank : ""}</span>
+      <label class="rule-body"><input type="checkbox" ${on ? "checked" : ""}>
+        <span><span class="rule-name">${esc(name)}</span><span class="rule-desc">${esc(desc)}</span></span></label>
+      <span class="rule-move">
+        <button type="button" class="icon up" aria-label="Move ${esc(name)} up" ${i === 0 ? "disabled" : ""}>${ICON.up}</button>
+        <button type="button" class="icon down" aria-label="Move ${esc(name)} down" ${i === draft.length - 1 ? "disabled" : ""}>${ICON.down}</button>
+      </span>
+    </li>`;
+  }).join("");
 }
-$("streak-btn").addEventListener("click", async () => {
-  const btn = $("streak-btn");
-  const enabled = btn.getAttribute("aria-pressed") !== "true";
+
+function openEditor() {
+  const active = status?.priority ?? [];
+  draft = [
+    ...active.map((rule) => ({ rule, on: true })),
+    ...Object.keys(RULES).filter((rule) => !active.includes(rule)).map((rule) => ({ rule, on: false })),
+  ];
+  renderRules();
+  $("prio-msg").textContent = "";
+  $("prio-editor").hidden = false;
+  $("prio-btn").setAttribute("aria-expanded", "true");
+}
+
+function closeEditor() {
+  draft = null;
+  $("prio-editor").hidden = true;
+  $("prio-btn").setAttribute("aria-expanded", "false");
+}
+
+$("prio-btn").addEventListener("click", () => (draft ? closeEditor() : openEditor()));
+$("prio-cancel").addEventListener("click", closeEditor);
+
+$("rules").addEventListener("change", (ev) => {
+  const i = Number(ev.target.closest("li").dataset.i);
+  draft[i].on = ev.target.checked;
+  renderRules();
+  $("rules").children[i].querySelector("input").focus();
+});
+
+$("rules").addEventListener("click", (ev) => {
+  const btn = ev.target.closest("button.up, button.down");
+  if (!btn) return;
+  const i = Number(btn.closest("li").dataset.i);
+  const j = btn.classList.contains("up") ? i - 1 : i + 1;
+  [draft[i], draft[j]] = [draft[j], draft[i]];
+  renderRules();
+  // Keep focus on the same button of the moved rule, or its other button at the ends.
+  const moved = $("rules").children[j];
+  (moved.querySelector(`button.${btn.classList.contains("up") ? "up" : "down"}:not(:disabled)`)
+    ?? moved.querySelector("button:not(:disabled)"))?.focus();
+});
+
+$("prio-save").addEventListener("click", async () => {
+  const rules = draft.filter((d) => d.on).map((d) => d.rule);
+  const msg = $("prio-msg");
+  if (!rules.length) {
+    msg.className = "msg err"; msg.textContent = "Tick at least one rule.";
+    return;
+  }
+  const btn = $("prio-save");
   btn.disabled = true;
   try {
-    const res = await api("api/settings/streak_first", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Update failed");
-    renderStreakFirst(enabled);
+    await send("PUT", "api/settings/priority", { rules });
+    closeEditor();
+    refresh();
   } catch (e) {
-    $("add-msg").className = "msg err"; $("add-msg").textContent = e.message;
+    msg.className = "msg err"; msg.textContent = e.message;
   } finally {
     btn.disabled = false;
-    refresh();
   }
 });
+
+// === Pause === //
 
 function renderPaused(paused) {
   const btn = $("pause-btn");
   btn.dataset.paused = String(paused);
-  btn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  btn.textContent = paused ? "Resume" : "Pause";
 }
 $("pause-btn").addEventListener("click", async () => {
   const btn = $("pause-btn");
   const paused = btn.dataset.paused !== "true";
   btn.disabled = true;
   try {
-    const res = await api("api/settings/paused", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Update failed");
+    await send("PUT", "api/settings/paused", { paused });
     renderPaused(paused);
   } catch (e) {
-    $("add-msg").className = "msg err"; $("add-msg").textContent = e.message;
+    showError(e.message);
   } finally {
     btn.disabled = false;
     refresh();
   }
 });
 
-function applyLock() {
-  const btn = $("lock-btn");
-  $("channels").classList.toggle("locked", orderLocked);
-  btn.textContent = orderLocked ? "🔒 Order locked" : "🔓 Order unlocked";
-  btn.title = orderLocked ? "Unlock to reorder channels by dragging" : "Lock the order so it can't be changed by accident";
-  btn.setAttribute("aria-pressed", String(orderLocked));
-}
-$("lock-btn").addEventListener("click", () => {
-  orderLocked = !orderLocked;
-  try { localStorage.setItem("orderLocked", orderLocked ? "1" : "0"); } catch {}
-  applyLock();
-});
-applyLock();
+// === Login and web access === //
 
 $("auth-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -667,9 +873,7 @@ $("regen-btn").addEventListener("click", async () => {
   btn.dataset.confirm = ""; btn.textContent = "Regenerate login token";
   btn.disabled = true;
   try {
-    const res = await api("api/auth/regenerate", { method: "POST" });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || res.statusText);
+    const body = await (await send("POST", "api/auth/regenerate")).json();
     $("new-token-value").textContent = body.token;
     $("new-token").hidden = false;
     msg.className = "msg ok";
