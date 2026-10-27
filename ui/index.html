@@ -191,7 +191,8 @@
   .sub { color: var(--dim); font-size: var(--text-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 16px; color: var(--dim); text-align: center; }
   .empty svg.i { width: 28px; height: 28px; }
-  td.actions { width: 1%; text-align: right; }
+  td.actions, th.actions { width: 1%; text-align: right; }
+  td.actions .icon-btn, th.actions .icon-btn { display: inline-grid; vertical-align: middle; }
 
   /* Drag to reorder */
   td.grip { width: 1%; padding-right: 0; }
@@ -246,7 +247,7 @@
   .code { margin: 16px 0; font: 600 2rem/1.2 var(--font-mono); letter-spacing: .15em; }
   .auth-form { margin-top: 16px; }
   .stack { display: flex; flex-direction: column; gap: 12px; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
   .token { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .token code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 10px 12px; background: var(--bg);
     border: 1px solid var(--border); font-size: .82rem; }
@@ -440,7 +441,7 @@
     <header><h2>Web access</h2></header>
     <div class="body stack">
       <p class="hint">If your login token leaked, regenerate it. Every other browser is logged out and needs the new token.</p>
-      <div class="actions">
+      <div class="button-row">
         <button class="btn danger small" id="regen-btn" type="button">Regenerate login token</button>
         <button class="btn secondary small" id="logout-btn" type="button">Log out</button>
       </div>
