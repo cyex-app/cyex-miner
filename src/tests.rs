@@ -8,7 +8,7 @@ use crate::{
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
-    twitch::parse_watch_streak,
+    twitch::{parse_channel_id, parse_stream_info, parse_watch_streak},
 };
 
 #[test]
@@ -71,6 +71,18 @@ fn parses_watch_streak() {
     assert_eq!(parse_watch_streak(&resp(json!("7"))), Some(7));
     assert_eq!(parse_watch_streak(&resp(json!(3))), Some(3));
     assert_eq!(parse_watch_streak(&json!({ "data": { "channel": { "self": null } } })), None);
+}
+
+/// A failed query must be an error, not "no such channel" or "offline": followers sync deletes on those.
+#[test]
+fn gql_errors_are_not_missing_channels() {
+    let failed = json!({ "errors": [{ "message": "service timeout" }], "data": null });
+    assert!(parse_channel_id(&failed).is_err());
+    assert!(parse_stream_info(&failed).is_err());
+
+    assert_eq!(parse_channel_id(&json!({ "data": { "user": { "id": "42" } } })).unwrap(), Some("42".into()));
+    assert_eq!(parse_channel_id(&json!({ "data": { "user": null } })).unwrap(), None);
+    assert!(parse_stream_info(&json!({ "data": { "user": { "stream": null } } })).unwrap().is_none());
 }
 
 #[test]

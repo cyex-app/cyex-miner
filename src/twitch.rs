@@ -45,19 +45,21 @@ pub struct Twitch {
     spade_re: Regex,
 }
 
-fn parse_channel_id(resp: &Value) -> Result<Option<String>> {
-    if resp.get("data").is_none() {
+// A failed query comes back as `{"errors": [...], "data": null}`. That must be an error, not
+// "no such channel" or "offline": callers act on those (followers sync deletes channels).
+pub(crate) fn parse_channel_id(resp: &Value) -> Result<Option<String>> {
+    if resp["data"].is_null() {
         bail!("unexpected response: {resp}");
     }
     Ok(resp["data"]["user"]["id"].as_str().map(str::to_string))
 }
 
 /// `Ok(None)` means the channel is offline.
-fn parse_stream_info(resp: &Value) -> Result<Option<StreamInfo>> {
-    let user = &resp["data"]["user"];
-    if resp.get("data").is_none() {
+pub(crate) fn parse_stream_info(resp: &Value) -> Result<Option<StreamInfo>> {
+    if resp["data"].is_null() {
         bail!("unexpected response: {resp}");
     }
+    let user = &resp["data"]["user"];
     let stream = &user["stream"];
     if stream.is_null() {
         return Ok(None);
