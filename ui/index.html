@@ -1229,24 +1229,29 @@ function badgeHtml(b) {
   const where = b.allowed_channels ? `${fmt(b.allowed_channels)} channels` : "any channel";
   const meta = ["ends " + fmtDate(new Date(b.ends_at * 1000)).slice(0, 10), b.game, where].filter(Boolean).join(" · ");
   const added = b.added_channels ? ` · ${fmt(b.added_channels)} added` : "";
+  const watched = Math.min(b.minutes_watched, b.minutes_required);
+  // Badge art comes from Twitch's CDN; anything that isn't https gets the plain icon.
+  const image = /^https:\/\//.test(b.image) ? b.image : "";
   return `<li class="badge-row ${b.earned ? "earned" : ""}" data-id="${esc(b.campaign_id)}">
     <label class="badge-pick">
       <input type="checkbox" ${b.picked && !b.earned ? "checked" : ""} ${b.earned ? "disabled" : ""} aria-label="Pick ${esc(b.name)}">
-      ${b.image ? `<img src="${esc(b.image)}" alt="" width="28" height="28" loading="lazy">` : ICON.award}
+      ${image ? `<img src="${esc(image)}" alt="" width="28" height="28" loading="lazy">` : ICON.award}
       <span class="badge-text">
         <span class="rule-name" title="${esc(b.name)}">${esc(b.name)}</span>
         <span class="rule-desc" title="${esc(meta)}">${esc(meta)}</span>
         <span class="progress"><span class="track"><span class="fill" style="width:${b.earned ? 100 : pct}%"></span></span>
-          ${b.earned ? '<span class="chip earned">earned</span>' : `<span class="mono">${fmt(b.minutes_watched)}/${fmt(b.minutes_required)} min${added}</span>`}</span>
+          ${b.earned ? '<span class="chip earned">earned</span>' : `<span class="mono">${fmt(watched)}/${fmt(b.minutes_required)} min${added}</span>`}</span>
       </span>
     </label>
-    ${b.earned ? "" : `<button type="button" class="btn secondary small add-ch" data-tip="Add channels"
+    ${b.earned ? "" : `<button type="button" class="btn secondary small add-ch" data-tip="Add channels" aria-label="Add channels for ${esc(b.name)}"
       data-hint="Adds up to 5 eligible live channels, most viewers first. They're removed again once the badge is earned">Add</button>`}
   </li>`;
 }
 
 function renderBadges() {
-  const list = [...(status?.badges ?? [])].sort((a, b) => a.earned - b.earned || a.ends_at - b.ends_at);
+  // The server refreshes campaigns every 30 minutes; don't show one that has ended meanwhile.
+  const list = (status?.badges ?? []).filter((b) => b.ends_at > Date.now() / 1000)
+    .sort((a, b) => a.earned - b.earned || a.ends_at - b.ends_at);
   const key = JSON.stringify(list);
   if (key === badgesShown) return;
   badgesShown = key;
@@ -1260,6 +1265,11 @@ function renderBadges() {
   $("badges").innerHTML = list.map(badgeHtml).join("");
   if (focused) $("badges").querySelector(`li[data-id="${CSS.escape(focused.dataset.id)}"] ${focusedKind}`)?.focus();
 }
+
+// A badge image that fails to load is replaced by the plain icon.
+$("badges").addEventListener("error", (ev) => {
+  if (ev.target.matches?.("img")) ev.target.outerHTML = ICON.award;
+}, true);
 
 $("badges").addEventListener("change", async (ev) => {
   const box = ev.target.closest("input");
