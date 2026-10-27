@@ -87,8 +87,9 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
 
 - Watches up to 2 channels at a time (Twitch's limit), picked by an ordered list of rules: `BADGES`
   (channels eligible for a picked badge drop), `PRIORITIZED` (starred channels), `STREAK`, `LONGEST_STREAK`, `DROPS`, `SUBSCRIBED`, `POINTS_ASCENDING`,
-  `POINTS_DESCENDING`, `ORDER`. Set them in the web UI under **Watch priority** (saved in the database, overrides
-  `priority` in the config from then on). For example `STREAK`, `ORDER` keeps every watch streak and otherwise
+  `POINTS_DESCENDING`, `ORDER`. Set them in the web UI: unlock **Watch priority**, tick the rules you want and drag them
+  into order (mouse, touch, or the arrow keys on a handle). Changes are saved right away in the database and
+  override `priority` in the config from then on. For example `STREAK`, `ORDER` keeps every watch streak and otherwise
   watches the top 2 live channels of the list
 - Shows the current watch streak of each channel
 - Pause and resume mining from the web UI (**Pause** next to your name). While paused nothing is watched, chats are

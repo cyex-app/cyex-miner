@@ -213,8 +213,9 @@
   .rule-name { display: block; font-weight: 600; }
   .rule-desc { display: block; color: var(--dim); font-size: var(--text-hint); }
   .rule.off .rule-name { color: var(--muted); font-weight: 500; }
-  .rule-move { display: flex; flex-shrink: 0; margin-top: -4px; }
-  .editor-foot { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+  .rule .handle { margin: -4px -4px 0 -8px; }
+  .rule.dragging { position: relative; z-index: 2; background: var(--elevated); box-shadow: var(--shadow-pop); }
+  .rule input:disabled + span { cursor: default; }
 
   /* Badge drops */
   .badges { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
@@ -419,16 +420,11 @@
         <section class="card" id="priority">
           <header>
             <h2>Watch priority</h2>
-            <button class="btn secondary small" id="prio-btn" type="button" aria-expanded="false">Edit</button>
+            <button class="icon-btn lock" id="prio-lock" type="button" aria-pressed="true"></button>
           </header>
           <div class="body">
-            <p class="hint" id="prio-hint" style="margin-bottom:12px">Twitch counts 2 streams at a time. Rules are tried from the
-              top until both slots are taken; channels higher in the list win ties.</p>
+            <p class="hint" id="prio-hint" style="margin-bottom:12px"></p>
             <ol class="rules" id="rules"></ol>
-            <div class="editor-foot" id="prio-foot" hidden>
-              <button type="button" class="btn primary small" id="prio-save">Save</button>
-              <button type="button" class="btn secondary small" id="prio-cancel">Cancel</button>
-            </div>
           </div>
         </section>
 
@@ -1085,11 +1081,11 @@ function layoutTop(r) {
   return r.getBoundingClientRect().top - (t === "none" ? 0 : new DOMMatrixReadOnly(t).m42);
 }
 
-// Moves `row` before `before` (null = to the end), animating the rows that shift.
-function moveRow(row, before) {
-  const others = [...rowsEl.children].filter((r) => r !== row);
+// Moves `row` before `before` (null = to the end) in `list`, animating the rows that shift.
+function moveRow(row, before, list = rowsEl) {
+  const others = [...list.children].filter((r) => r !== row);
   const firstTop = new Map(others.map((r) => [r, r.getBoundingClientRect().top]));
-  rowsEl.insertBefore(row, before);
+  list.insertBefore(row, before);
   if (reduceMotion.matches) return;
   for (const r of others) {
     const dy = firstTop.get(r) - layoutTop(r);
@@ -1203,97 +1199,157 @@ rowsEl.addEventListener("keydown", (ev) => {
 });
 
 // === Watch priority === //
-// Shows the active rules; Edit turns the list into an editor with every rule.
+// Locked, it shows the active rules. Unlocked, it lists every rule with a tick box and a drag
+// handle (mouse, touch, or focus it and use the arrow keys); each change is saved right away.
+
+const rulesEl = $("rules");
 
 function renderRules() {
-  if (!draft) {
-    $("rules").innerHTML = (status?.priority ?? []).map((rule, i) => {
+  const unlocked = !!draft;
+  $("prio-hint").textContent = unlocked
+    ? "Tick the rules you want and drag them into order. Changes are saved as you make them."
+    : "Twitch counts 2 streams at a time. Rules are tried from the top until both slots are taken; channels higher in the list win ties.";
+  if (!unlocked) {
+    rulesEl.innerHTML = (status?.priority ?? []).map((rule, i) => {
       const [name, desc] = RULES[rule] ?? [rule, ""];
       return `<li class="rule"><span class="rule-n">${i + 1}</span>
         <span class="rule-body"><span><span class="rule-name">${esc(name)}</span><span class="rule-desc">${esc(desc)}</span></span></span></li>`;
     }).join("");
     return;
   }
+  const ticked = draft.filter((d) => d.on).length;
   let rank = 0;
-  $("rules").innerHTML = draft.map(({ rule, on }, i) => {
+  rulesEl.innerHTML = draft.map(({ rule, on }) => {
     const [name, desc] = RULES[rule] ?? [rule, ""];
-    return `<li class="rule ${on ? "" : "off"}" data-i="${i}">
+    // The last ticked rule can't be unticked: at least one is needed.
+    const last = on && ticked === 1;
+    return `<li class="rule ${on ? "" : "off"}" data-rule="${esc(rule)}">
+      <button class="icon-btn handle" type="button" data-tip="Drag to reorder" data-hint="Or focus and use the arrow keys"
+        aria-label="Move ${esc(name)}">${ICON.grip}</button>
       <span class="rule-n">${on ? ++rank : ""}</span>
-      <label class="rule-body"><input type="checkbox" ${on ? "checked" : ""}>
+      <label class="rule-body" ${last ? 'data-tip="At least one rule is needed"' : ""}>
+        <input type="checkbox" ${on ? "checked" : ""} ${last ? "disabled" : ""}>
         <span><span class="rule-name">${esc(name)}</span><span class="rule-desc">${esc(desc)}</span></span></label>
-      <span class="rule-move">
-        <button type="button" class="icon-btn up" data-tip="Move up" aria-label="Move ${esc(name)} up" ${i === 0 ? "disabled" : ""}>${ICON.up}</button>
-        <button type="button" class="icon-btn down" data-tip="Move down" aria-label="Move ${esc(name)} down" ${i === draft.length - 1 ? "disabled" : ""}>${ICON.down}</button>
-      </span>
     </li>`;
   }).join("");
 }
 
-function openEditor() {
+function applyPriorityLock() {
+  const locked = !draft;
+  const btn = $("prio-lock");
+  btn.setAttribute("aria-pressed", String(locked));
+  labelButton(btn, locked ? ICON.lock : ICON.unlock, locked ? "Priority locked" : "Priority unlocked",
+    locked ? "Click to change the rules" : "Click to lock it again. Changes are already saved");
+}
+
+function setPriorityLocked(locked) {
   const active = status?.priority ?? [];
-  draft = [
+  draft = locked ? null : [
     ...active.map((rule) => ({ rule, on: true })),
     ...Object.keys(RULES).filter((rule) => !active.includes(rule)).map((rule) => ({ rule, on: false })),
   ];
   renderRules();
-  $("prio-foot").hidden = false;
-  $("prio-btn").hidden = true;
-  $("prio-btn").setAttribute("aria-expanded", "true");
-  $("rules").querySelector("input")?.focus();
+  applyPriorityLock();
 }
+applyPriorityLock();
 
-function closeEditor() {
-  draft = null;
-  renderRules();
-  $("prio-foot").hidden = true;
-  $("prio-btn").hidden = false;
-  $("prio-btn").setAttribute("aria-expanded", "false");
-}
-
-$("prio-btn").addEventListener("click", openEditor);
-$("prio-cancel").addEventListener("click", () => { closeEditor(); $("prio-btn").focus(); });
+$("prio-lock").addEventListener("click", () => setPriorityLocked(!!draft));
 $("priority").addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && draft) $("prio-cancel").click();
-});
-
-$("rules").addEventListener("change", (ev) => {
-  const i = Number(ev.target.closest("li").dataset.i);
-  draft[i].on = ev.target.checked;
-  renderRules();
-  $("rules").children[i].querySelector("input").focus();
-});
-
-$("rules").addEventListener("click", (ev) => {
-  const btn = ev.target.closest("button.up, button.down");
-  if (!btn) return;
-  const i = Number(btn.closest("li").dataset.i);
-  const j = btn.classList.contains("up") ? i - 1 : i + 1;
-  [draft[i], draft[j]] = [draft[j], draft[i]];
-  renderRules();
-  // Keep focus on the same button of the moved rule, or its other button at the ends.
-  const moved = $("rules").children[j];
-  (moved.querySelector(`button.${btn.classList.contains("up") ? "up" : "down"}:not(:disabled)`)
-    ?? moved.querySelector("button:not(:disabled)"))?.focus();
-});
-
-$("prio-save").addEventListener("click", async () => {
-  const rules = draft.filter((d) => d.on).map((d) => d.rule);
-  if (!rules.length) return showError("Tick at least one rule");
-  const btn = $("prio-save");
-  btn.disabled = true;
-  try {
-    await send("PUT", "api/settings/priority", { rules });
-    status.priority = rules;
-    closeEditor();
-    $("prio-btn").focus();
-    toast("Watch priority saved");
-    refresh();
-  } catch (e) {
-    showError(e.message);
-  } finally {
-    btn.disabled = false;
+  if (ev.key === "Escape" && draft && !ruleDrag) {
+    setPriorityLocked(true);
+    $("prio-lock").focus();
   }
 });
+
+// Saves the ticked rules in order. Saves run one after another, so the last change wins.
+let prioSaving = Promise.resolve();
+function savePriority() {
+  const rules = draft.filter((d) => d.on).map((d) => d.rule);
+  prioSaving = prioSaving.then(async () => {
+    try {
+      await send("PUT", "api/settings/priority", { rules });
+      status.priority = rules;
+    } catch (e) {
+      showError(e.message);
+      refresh();
+    }
+  });
+}
+
+// Re-renders and puts focus back on the same control of the same rule.
+function rerenderRules(rule, kind) {
+  renderRules();
+  rulesEl.querySelector(`li[data-rule="${CSS.escape(rule)}"] ${kind}`)?.focus();
+}
+
+rulesEl.addEventListener("change", (ev) => {
+  const li = ev.target.closest("li");
+  draft.find((d) => d.rule === li.dataset.rule).on = ev.target.checked;
+  rerenderRules(li.dataset.rule, "input");
+  savePriority();
+});
+
+// Keyboard: arrow keys on a handle move its rule.
+rulesEl.addEventListener("keydown", (ev) => {
+  const handle = ev.target.closest("button.handle");
+  if (!handle || ruleDrag || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+  ev.preventDefault();
+  const rule = handle.closest("li").dataset.rule;
+  const i = draft.findIndex((d) => d.rule === rule);
+  const j = ev.key === "ArrowUp" ? i - 1 : i + 1;
+  if (j < 0 || j >= draft.length) return;
+  [draft[i], draft[j]] = [draft[j], draft[i]];
+  rerenderRules(rule, "button.handle");
+  savePriority();
+});
+
+// Mouse and touch: like the channel list, the rule follows the pointer and the others slide aside.
+let ruleDrag = null;
+
+rulesEl.addEventListener("pointerdown", (ev) => {
+  const handle = ev.target.closest("button.handle");
+  if (!handle || ev.button !== 0 || ruleDrag) return;
+  ev.preventDefault();
+  hideTip();
+  handle.setPointerCapture(ev.pointerId);
+  const item = handle.closest("li");
+  ruleDrag = { item, pointerId: ev.pointerId, grabY: ev.clientY - item.getBoundingClientRect().top,
+    start: [...rulesEl.children].map((li) => li.dataset.rule).join() };
+  item.style.transition = "none";
+  item.classList.add("dragging");
+  document.body.classList.add("is-dragging");
+});
+
+rulesEl.addEventListener("pointermove", (ev) => {
+  if (!ruleDrag || ev.pointerId !== ruleDrag.pointerId) return;
+  const { item } = ruleDrag;
+  const top = ev.clientY - ruleDrag.grabY;
+  const center = top + item.offsetHeight / 2;
+  const before = [...rulesEl.children].find((li) => li !== item && center < layoutTop(li) + li.offsetHeight / 2) ?? null;
+  if (before !== item.nextElementSibling) moveRow(item, before, rulesEl);
+  item.style.transform = `translateY(${top - layoutTop(item)}px)`;
+});
+
+function endRuleDrag(ev) {
+  if (!ruleDrag || ev.pointerId !== ruleDrag.pointerId) return;
+  const { item, start } = ruleDrag;
+  ruleDrag = null;
+  document.body.classList.remove("is-dragging");
+  item.classList.remove("dragging");
+  item.style.transition = reduceMotion.matches ? "none" : SLIDE;
+  item.style.transform = "";
+  const order = [...rulesEl.children].map((li) => li.dataset.rule);
+  setTimeout(() => {
+    if (ruleDrag || !draft) return;
+    // Renumbers the ticked rules in their new order.
+    rerenderRules(item.dataset.rule, "button.handle");
+  }, 200);
+  if (ev.type === "pointercancel" || order.join() === start) return;
+  draft.sort((a, b) => order.indexOf(a.rule) - order.indexOf(b.rule));
+  savePriority();
+}
+rulesEl.addEventListener("pointerup", endRuleDrag);
+rulesEl.addEventListener("pointercancel", endRuleDrag);
 
 // === Badge drops === //
 // Drop campaigns that give a badge for watch time. Ticking one gives its channels a watch slot
