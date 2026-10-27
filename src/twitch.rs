@@ -99,7 +99,6 @@ fn parse_campaign_ids(resp: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The current watch streak from a `RewardList` response. Twitch sends the count as a string.
 /// Live channels from a game directory page, as (id, login, viewers).
 pub(crate) fn parse_directory(resp: &Value) -> Vec<(String, String, i64)> {
     resp["data"]["game"]["streams"]["edges"]
@@ -118,6 +117,7 @@ pub(crate) fn parse_directory(resp: &Value) -> Vec<(String, String, i64)> {
         .collect()
 }
 
+/// The current watch streak from a `RewardList` response. Twitch sends the count as a string.
 pub fn parse_watch_streak(resp: &Value) -> Option<u32> {
     let value = &resp["data"]["channel"]["self"]["watchStreakMilestone"]["watchStreakMilestone"]["value"];
     match value {
@@ -402,7 +402,8 @@ impl Twitch {
                 "options": {
                     "broadcasterLanguages": [],
                     "freeformTags": null,
-                    "includeRestricted": ["SUB_ONLY_LIVE"],
+                    // No sub-only streams: they can't be watched without a subscription.
+                    "includeRestricted": [],
                     "recommendationsContext": { "platform": "web" },
                     "sort": "VIEWER_COUNT",
                     "systemFilters": [],

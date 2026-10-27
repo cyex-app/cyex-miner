@@ -381,15 +381,29 @@ impl Miner {
     /// Adds a channel by name (from the web UI) to the end of the list.
     pub async fn add_streamer(&self, username: &str) -> Result<Arc<Streamer>> {
         let username = normalize_login(username)?;
-        if self.streamers.read().unwrap().iter().any(|s| s.username == username) {
+        let existing = self.streamers.read().unwrap().iter().find(|s| s.username == username).cloned();
+        if existing.as_ref().is_some_and(|s| s.source != Source::Badge) {
             bail!("{username} is already being mined");
         }
         if !self.adding.lock().unwrap().insert(username.clone()) {
             bail!("{username} is already being added");
         }
-        let result = self.add_streamer_inner(&username).await;
+        let result = match existing {
+            // Quick-added for a badge: adding it by hand keeps it for good.
+            Some(s) => self.keep_badge_channel(&s, &username).await,
+            None => self.add_streamer_inner(&username).await,
+        };
         self.adding.lock().unwrap().remove(&username);
         result
+    }
+
+    /// Turns a quick-added badge channel into a manual one, keeping its star.
+    async fn keep_badge_channel(&self, streamer: &Streamer, username: &str) -> Result<Arc<Streamer>> {
+        let starred = streamer.state().prioritized;
+        self.unregister(&streamer.channel_id)?;
+        let kept = self.add_channel(streamer.channel_id.clone(), username, Source::Manual).await?;
+        kept.state().prioritized = starred;
+        Ok(kept)
     }
 
     async fn add_streamer_inner(&self, username: &str) -> Result<Arc<Streamer>> {
@@ -406,9 +420,15 @@ impl Miner {
         if self.find_by_channel(&channel_id).is_some() {
             bail!("{username} is already being mined");
         }
-        let settings = self.config.streamer_defaults.clone();
+        let mut settings = self.config.streamer_defaults.clone();
+        let mut overrides = json!({});
+        if source == Source::Badge {
+            // Badge progress needs drops on, whatever the defaults say; saved so it survives a restart.
+            settings.claim_drops = true;
+            overrides = json!({ "claim_drops": true });
+        }
         self.store
-            .add_channel(&channel_id, username, source, settings.prioritize, &json!({}))
+            .add_channel(&channel_id, username, source, settings.prioritize, &overrides)
             .context("could not save the channel")?;
         if source == Source::Manual {
             if let Err(e) = self.store.remove_from_blacklist(&channel_id) {

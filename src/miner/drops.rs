@@ -101,8 +101,9 @@ impl Miner {
         loop {
             let streamers = self.streamers();
             // The defaults count too: badge drops are listed before any channel is added for them.
-            let claims_drops =
-                self.config.streamer_defaults.claim_drops || streamers.iter().any(|s| s.settings.claim_drops);
+            let claims_drops = self.config.streamer_defaults.claim_drops
+                || self.has_picked_badges()
+                || streamers.iter().any(|s| s.settings.claim_drops);
             if !self.paused() && claims_drops {
                 if now() - last_refresh > 30.0 * 60.0 {
                     last_refresh = now();

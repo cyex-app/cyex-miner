@@ -148,21 +148,41 @@ impl Miner {
             .ok_or_else(|| anyhow!("No running badge drop {campaign_id}"))
     }
 
-    /// Replaces the badge list from freshly loaded campaigns, keeping known progress.
+    /// Whether any badge is picked, which keeps the campaigns loop running.
+    pub(super) fn has_picked_badges(&self) -> bool {
+        !self.badges.picked.read().unwrap().is_empty()
+    }
+
+    /// Replaces the badge list from freshly loaded campaigns, keeping known progress. Picks of
+    /// campaigns that are no longer running are dropped.
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
-        let mut badges = self.badges.badges.write().unwrap();
-        let fresh: Vec<Badge> = campaigns
-            .iter()
-            .filter_map(Badge::from_campaign)
-            .map(|mut b| {
-                if let Some(old) = badges.iter().find(|o| o.campaign_id == b.campaign_id) {
-                    b.minutes_watched = old.minutes_watched;
-                    b.earned = old.earned;
-                }
-                b
-            })
-            .collect();
-        *badges = fresh;
+        let running: HashSet<String> = {
+            let mut badges = self.badges.badges.write().unwrap();
+            let fresh: Vec<Badge> = campaigns
+                .iter()
+                .filter_map(Badge::from_campaign)
+                .map(|mut b| {
+                    if let Some(old) = badges.iter().find(|o| o.campaign_id == b.campaign_id) {
+                        b.minutes_watched = old.minutes_watched;
+                        b.earned = old.earned;
+                    }
+                    b
+                })
+                .collect();
+            *badges = fresh;
+            badges.iter().map(|b| b.campaign_id.clone()).collect()
+        };
+        let saved = {
+            let mut picked = self.badges.picked.write().unwrap();
+            let before = picked.len();
+            picked.retain(|id| running.contains(id));
+            (picked.len() != before).then(|| serde_json::to_string(&*picked).unwrap_or_default())
+        };
+        if let Some(json) = saved {
+            if let Err(e) = self.store.set_meta(PICKED_KEY, &json) {
+                warn!("Could not save the picked badges: {e:#}");
+            }
+        }
     }
 
     /// Applies watch progress and earned badges from the drops inventory.
@@ -258,20 +278,12 @@ impl Miner {
         if badge.earned {
             bail!("The {} badge is already earned", badge.name);
         }
-        let mut live: Vec<(String, String, i64)> = if badge.allowed.is_empty() {
+        // Live streams of the game: from the directory, or the campaign's own channel list.
+        let streaming: Vec<(String, String, i64)> = if badge.allowed.is_empty() {
             if badge.game_slug.is_empty() {
                 bail!("Twitch didn't say which game the {} badge is for", badge.name);
             }
-            let found = self.twitch.live_in_game(&badge.game_slug).await?;
-            // Drops have to be on for this campaign on the stream itself.
-            let ids: Vec<String> = found.iter().map(|(id, _, _)| id.clone()).collect();
-            let campaigns = self.twitch.campaign_ids_for_channels(&ids).await;
-            found
-                .into_iter()
-                .zip(campaigns)
-                .filter(|(_, ids)| ids.contains(&badge.campaign_id))
-                .map(|(channel, _)| channel)
-                .collect()
+            self.twitch.live_in_game(&badge.game_slug).await?
         } else {
             let logins: Vec<String> = badge.allowed.iter().map(|(_, login)| login.clone()).collect();
             let overview = self.twitch.channels_overview(&logins).await;
@@ -285,6 +297,15 @@ impl Miner {
                 })
                 .collect()
         };
+        // Drops have to be on for this campaign on the stream itself.
+        let ids: Vec<String> = streaming.iter().map(|(id, _, _)| id.clone()).collect();
+        let campaigns = self.twitch.campaign_ids_for_channels(&ids).await;
+        let mut live: Vec<(String, String, i64)> = streaming
+            .into_iter()
+            .zip(campaigns)
+            .filter(|(_, ids)| ids.contains(&badge.campaign_id))
+            .map(|(channel, _)| channel)
+            .collect();
 
         // Leave channels already in the database (followed ones may not be loaded) and removed ones alone.
         let known: HashSet<String> = self.store.channels()?.into_iter().map(|r| r.id).collect();
@@ -302,18 +323,23 @@ impl Miner {
             if !reserved {
                 continue;
             }
+            // Recorded first, so a crash mid-add can't leave a badge channel that's never removed.
+            let entry = AddedChannel { campaign_id: badge.campaign_id.clone(), ends_at: badge.ends_at };
+            self.badges.added.lock().unwrap().insert(id.clone(), entry);
+            self.save_badge_channels();
             let result = self.add_channel(id.clone(), &login, Source::Badge).await;
             self.adding.lock().unwrap().remove(&login);
             match result {
-                Ok(_) => {
-                    let entry = AddedChannel { campaign_id: badge.campaign_id.clone(), ends_at: badge.ends_at };
-                    self.badges.added.lock().unwrap().insert(id, entry);
-                    added.push(login);
+                Ok(_) => added.push(login),
+                Err(e) => {
+                    self.forget_badge_channel(&id);
+                    warn!("Could not add {login} for the {} badge: {e:#}", badge.name);
                 }
-                Err(e) => warn!("Could not add {login} for the {} badge: {e:#}", badge.name),
             }
         }
-        self.save_badge_channels();
+        if added.is_empty() {
+            bail!("Could not add any channel for {}, see the log", badge.name);
+        }
 
         let picked = self.badges.picked.read().unwrap().contains(campaign_id);
         if picked {
