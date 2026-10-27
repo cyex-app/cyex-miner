@@ -115,12 +115,14 @@
   .inline-form .field { flex: 1; }
 
   /* Segmented control */
-  .seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--border-strong);
-    border-radius: var(--radius); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
-  .seg button { height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none;
-    color: var(--muted); font-size: .8rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color var(--fast); }
-  .seg button[aria-checked="true"] { background: var(--accent-dim); color: var(--accent-text); }
-  .seg button:focus-visible { outline-offset: -2px; }
+  /* Sortable column headers: click for highest first, again for lowest first. The arrow's space is
+     always kept, so labels don't shift when it appears. */
+  .th-sort { display: inline-flex; align-items: center; gap: 3px; margin: -4px; padding: 4px; border: 0;
+    border-radius: var(--radius-sm); background: none; font: inherit; letter-spacing: inherit; text-transform: inherit;
+    color: inherit; cursor: pointer; transition: color var(--fast); }
+  .th-sort svg.i { width: 12px; height: 12px; stroke-width: 2.25; visibility: hidden; }
+  th[aria-sort] .th-sort { color: var(--accent-text); }
+  th[aria-sort] .th-sort svg.i { visibility: visible; }
 
   /* Checkbox */
   input[type=checkbox] { appearance: none; display: grid; place-items: center; width: 16px; height: 16px; margin: 0;
@@ -281,7 +283,8 @@
     .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
     .icon-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
     .icon-btn.star:hover { color: var(--gold); }
-    .seg button:hover { color: var(--text); }
+    th:not([aria-sort]) .th-sort:hover { color: var(--text); }
+    th:not([aria-sort]) .th-sort:hover svg.i { visibility: visible; opacity: .5; }
     body:not(.is-dragging) tbody tr:hover { background: var(--row-hover); box-shadow: inset 2px 0 0 var(--border-strong); }
     body:not(.is-dragging) tbody tr.watching:hover { box-shadow: inset 3px 0 0 var(--accent); }
     .name a:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -358,15 +361,8 @@
         <header>
           <h2>Channels</h2>
           <div class="tools">
-            <span class="label hide-sm">Sort</span>
-            <div class="seg" id="sort" role="radiogroup" aria-label="Sort channels by">
-              <button type="button" role="radio" data-sort="order">List order</button>
-              <button type="button" role="radio" data-sort="points">Points</button>
-              <button type="button" role="radio" data-sort="session">Session</button>
-              <button type="button" role="radio" data-sort="watched">Watched</button>
-              <button type="button" role="radio" data-sort="streak">Streak</button>
-            </div>
-            <button class="icon-btn" id="dir-btn" type="button"></button>
+            <button class="btn secondary small" id="reset-sort" type="button" data-tip="Back to list order"
+              data-hint="Sorting only changes this view">Reset</button>
             <button class="icon-btn lock" id="lock-btn" type="button"></button>
           </div>
         </header>
@@ -377,10 +373,10 @@
               <th class="grip"><span class="sr-only">Move</span></th>
               <th class="num label" title="Place in the list">#</th>
               <th class="label">Channel</th>
-              <th class="num label">Points</th>
-              <th class="num label hide-xs">Session</th>
-              <th class="num label hide-sm">Watched</th>
-              <th class="num label hide-sm" title="Current watch streak">Streak</th>
+              <th class="num label" data-sort="points"><button class="th-sort" type="button">Points</button></th>
+              <th class="num label hide-xs" data-sort="session"><button class="th-sort" type="button">Session</button></th>
+              <th class="num label hide-sm" data-sort="watched"><button class="th-sort" type="button">Watched</button></th>
+              <th class="num label hide-sm" data-sort="streak"><button class="th-sort" type="button">Streak</button></th>
               <th></th>
             </tr></thead>
             <tbody id="rows"></tbody>
@@ -470,8 +466,6 @@ const ICON = {
   star: svg('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'),
   up: svg('<path d="m18 15-6-6-6 6"/>'),
   down: svg('<path d="m6 9 6 6 6-6"/>'),
-  desc: svg('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/>'),
-  asc: svg('<path d="m3 8 4-4 4 4"/><path d="M7 4v16"/><path d="M11 12h4"/><path d="M11 16h7"/><path d="M11 20h10"/>'),
   lock: svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
   unlock: svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'),
   sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>'),
@@ -753,7 +747,7 @@ function renderListHint() {
   if (crowded) {
     hint.textContent = `${liveStarred} starred channels are live, but Twitch only counts 2 at a time. The ones higher in the list win.`;
   } else if (sortKey !== "order") {
-    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; sort by list order to reorder.";
+    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; Reset goes back to list order.";
   } else {
     hint.textContent = orderLocked
       ? "Unlock the order to drag channels into place. Higher channels win ties in every watch priority rule."
@@ -763,14 +757,19 @@ function renderListHint() {
 
 function applySortState() {
   const [field, dir] = sortKey.split("-");
-  for (const b of $("sort").children) {
-    const on = b.dataset.sort === field;
-    b.setAttribute("aria-checked", String(on));
-    b.tabIndex = on ? 0 : -1;
+  for (const th of document.querySelectorAll("th[data-sort]")) {
+    const btn = th.querySelector("button");
+    const on = th.dataset.sort === field;
+    if (on) th.setAttribute("aria-sort", dir === "asc" ? "ascending" : "descending"); else th.removeAttribute("aria-sort");
+    // The arrow shows the current direction, or on hover the one a click picks (highest first).
+    const label = btn.textContent;
+    btn.innerHTML = (on && dir === "asc" ? ICON.up : ICON.down) + esc(label);
+    btn.dataset.tip = !on ? `Sort by ${label.toLowerCase()}` : dir === "asc" ? "Lowest first" : "Highest first";
+    btn.dataset.hint = on ? "Click to flip" : "Highest first";
+    if (btn === tipAnchor) showTip(btn);
   }
-  const dirBtn = $("dir-btn");
-  dirBtn.hidden = sortKey === "order";
-  if (dir) labelButton(dirBtn, dir === "asc" ? ICON.asc : ICON.desc, dir === "asc" ? "Lowest first" : "Highest first", "Click to flip");
+  // Reset takes the lock's place: reordering only works in list order.
+  $("reset-sort").hidden = sortKey === "order";
 
   const lock = $("lock-btn");
   $("channels").classList.toggle("no-reorder", !canReorder());
@@ -966,25 +965,16 @@ $("rows").addEventListener("click", async (ev) => {
   refresh();
 });
 
-$("sort").addEventListener("click", (ev) => {
-  const field = ev.target.closest("button")?.dataset.sort;
-  if (!field || field === sortKey.split("-")[0]) return;
-  setSort(field === "order" ? "order" : field + "-desc");
+// A header click sorts by that column, highest first; clicking it again flips the direction.
+document.querySelector("#channels thead").addEventListener("click", (ev) => {
+  const field = ev.target.closest("th[data-sort]")?.dataset.sort;
+  if (!field) return;
+  const [current, dir] = sortKey.split("-");
+  setSort(`${field}-${current === field && dir === "desc" ? "asc" : "desc"}`);
 });
-// Arrow keys move and pick, like a radio group.
-$("sort").addEventListener("keydown", (ev) => {
-  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
-  if (!step) return;
-  ev.preventDefault();
-  const opts = [...$("sort").children];
-  const i = opts.findIndex((b) => b.getAttribute("aria-checked") === "true");
-  const next = opts[(i + step + opts.length) % opts.length];
-  next.click();
-  next.focus();
-});
-$("dir-btn").addEventListener("click", () => {
-  const [field, dir] = sortKey.split("-");
-  setSort(`${field}-${dir === "asc" ? "desc" : "asc"}`);
+$("reset-sort").addEventListener("click", () => {
+  setSort("order");
+  $("lock-btn").focus();
 });
 
 $("lock-btn").addEventListener("click", () => {
