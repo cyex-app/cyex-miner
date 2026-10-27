@@ -80,7 +80,10 @@ async fn session(
     channels: &Mutex<HashSet<String>>,
     commands: &mut mpsc::UnboundedReceiver<Command>,
 ) -> Result<bool> {
-    let (ws, _) = connect_async(IRC_URL).await?;
+    // A stalled handshake would otherwise hang chat for good.
+    let (ws, _) = tokio::time::timeout(Duration::from_secs(30), connect_async(IRC_URL))
+        .await
+        .map_err(|_| anyhow::anyhow!("connecting to chat timed out"))??;
     let (mut sink, mut stream) = ws.split();
     sink.send(Message::Text(format!("PASS oauth:{token}"))).await?;
     sink.send(Message::Text(format!("NICK {login}"))).await?;

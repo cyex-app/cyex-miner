@@ -108,8 +108,9 @@ async fn run_connection(
     messages: mpsc::UnboundedSender<String>,
 ) {
     loop {
-        match connect_async(PUBSUB_URL).await {
-            Ok((ws, _)) => {
+        // A stalled handshake would otherwise hang this connection for good.
+        match tokio::time::timeout(Duration::from_secs(30), connect_async(PUBSUB_URL)).await {
+            Ok(Ok((ws, _))) => {
                 debug!("#{index} - PubSub connected");
                 let (mut sink, mut stream) = ws.split();
                 let initial = topics.lock().unwrap().clone();
@@ -174,7 +175,8 @@ async fn run_connection(
                 }
                 let _ = sink.close().await;
             }
-            Err(e) => warn!("#{index} - Could not connect to PubSub: {e}"),
+            Ok(Err(e)) => warn!("#{index} - Could not connect to PubSub: {e}"),
+            Err(_) => warn!("#{index} - Connecting to PubSub timed out"),
         }
         info!("#{index} - Reconnecting to Twitch PubSub in ~30 seconds");
         tokio::time::sleep(random_between(25.0, 35.0)).await;
