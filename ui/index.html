@@ -100,6 +100,8 @@
   .icon-btn:disabled { opacity: .4; cursor: default; }
   .icon-btn[aria-pressed="true"].lock { color: var(--text); }
   .icon-btn.toggle { width: 37px; height: 37px; border: 1px solid var(--border-strong); }
+  /* Header controls share the toggle's 37px height. */
+  .bar .btn { height: 37px; padding-block: 0; }
   .icon-btn.star.on { color: var(--gold); }
   .icon-btn.star.on svg { fill: currentColor; }
 
@@ -177,7 +179,7 @@
   .name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .name-row > div { min-width: 0; }
   .name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
-  .name a { color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+  .name a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; text-decoration: none; }
   /* Takes the spare width and ellipsizes, so the number columns never get pushed out. */
   td.channel { width: 100%; max-width: 0; min-width: 160px; }
   .sub { color: var(--dim); font-size: var(--text-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -275,6 +277,13 @@
     .hide-sm { display: none; }
     .user { max-width: 40vw; }
   }
+  /* Phones: the session total is in the status line, so the column goes and the remove button stays in view. */
+  @media (max-width: 480px) {
+    .hide-xs { display: none; }
+    td.channel { min-width: 100px; }
+    th, td { padding-inline: 4px; }
+    .brand .wordmark { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -286,7 +295,7 @@
         <rect x="10" y="13" width="18" height="6" fill="var(--accent)"/>
         <rect x="3" y="21" width="15" height="6" fill="var(--mark-ink)"/>
       </svg>
-      points miner
+      <span class="wordmark">points miner</span>
     </h1>
     <div class="bar-right">
       <span id="user" class="user">Connecting…</span>
@@ -351,7 +360,7 @@
               <th class="num label" title="Place in the list">#</th>
               <th class="label">Channel</th>
               <th class="num label">Points</th>
-              <th class="num label">Session</th>
+              <th class="num label hide-xs">Session</th>
               <th class="num label hide-sm">Watched</th>
               <th class="num label hide-sm" title="Current watch streak">Streak</th>
               <th></th>
@@ -473,6 +482,8 @@ let authed = null;
 let status = null;        // the last status from the server
 let drag = null;          // the row being dragged, see startDrag()
 let savingOrder = false;
+let armedRemove = null;   // id of the channel whose Remove button waits for a second click
+let armTimer = 0;
 let draft = null;         // [{ rule, on }] while the watch priority editor is open
 // Reordering is locked by default, so a stray drag can't change the order. Both settings are per browser.
 let orderLocked = true;
@@ -520,6 +531,7 @@ const tip = $("tip");
 let tipTimer = 0, tipAnchor = null, tipHiddenAt = 0;
 
 function showTip(el) {
+  if (!el.isConnected) return hideTip();
   tipAnchor = el;
   tip.innerHTML = `<b>${esc(el.dataset.tip)}</b>` + (el.dataset.hint ? `<span>${esc(el.dataset.hint)}</span>` : "");
   tip.hidden = false;
@@ -669,11 +681,11 @@ function rowHtml({ s, pos }, i) {
         <div><div class="name"><a href="https://www.twitch.tv/${esc(s.username)}" target="_blank" rel="noopener">${esc(s.username)}</a>${chips}</div>
         <div class="sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
     <td class="num">${fmt(s.points)}</td>
-    <td class="num ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
+    <td class="num hide-xs ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
     <td class="num hide-sm">${s.online ? fmt(Math.floor(s.minutes_watched)) + "m" : "–"}</td>
     <td class="num hide-sm">${s.watch_streak == null ? "–" : fmt(s.watch_streak)}</td>
-    <td class="actions"><button class="icon-btn remove" type="button" data-id="${esc(s.id)}" data-tip="Remove"
-      aria-label="Remove ${esc(s.username)}">${ICON.trash}</button></td>
+    <td class="actions"><button class="icon-btn remove ${armedRemove === s.id ? "armed" : ""}" type="button" data-id="${esc(s.id)}"
+      data-tip="${armedRemove === s.id ? "Click again to remove" : "Remove"}" aria-label="Remove ${esc(s.username)}">${ICON.trash}</button></td>
   </tr>`;
 }
 
@@ -685,14 +697,26 @@ function renderRows() {
     $("rows").innerHTML = `<tr><td colspan="8"><div class="empty">${ICON.tv}No channels yet. Add one to start mining.</div></td></tr>`;
     return;
   }
-  // Re-rendering replaces the buttons; keep keyboard focus on the same one.
-  const focused = document.activeElement?.closest("#rows button");
-  const focusedRow = focused?.closest("tr")?.dataset.id;
-  const focusedKind = ["handle", "star", "remove"].find((k) => focused?.classList.contains(k));
+  // Re-rendering replaces the buttons (every 2s while a channel is live); keep keyboard focus and
+  // the tooltip on the same ones.
+  const focused = buttonKey(document.activeElement);
+  const tipped = buttonKey(tipAnchor);
   $("rows").innerHTML = sortedRows(streamers).map(rowHtml).join("");
-  if (focusedRow && focusedKind) {
-    $("rows").querySelector(`tr[data-id="${CSS.escape(focusedRow)}"] button.${focusedKind}`)?.focus();
+  findButton(focused)?.focus();
+  if (tipped) {
+    const el = findButton(tipped);
+    if (el) showTip(el); else hideTip();
   }
+}
+
+// Identifies a row button across re-renders: [channel id, kind].
+function buttonKey(el) {
+  const btn = el?.closest?.("#rows button");
+  const kind = ["handle", "star", "remove"].find((k) => btn?.classList.contains(k));
+  return kind ? [btn.closest("tr").dataset.id, kind] : null;
+}
+function findButton(key) {
+  return key && $("rows").querySelector(`tr[data-id="${CSS.escape(key[0])}"] button.${key[1]}`);
 }
 
 function renderListHint() {
@@ -898,15 +922,18 @@ $("rows").addEventListener("click", async (ev) => {
   }
   const btn = ev.target.closest("button.remove");
   if (!btn) return;
-  // Arms first; a second click within 3s removes.
-  if (btn.dataset.confirm !== "1") {
-    btn.dataset.confirm = "1";
-    btn.classList.add("armed");
-    btn.dataset.tip = "Click again to remove";
-    showTip(btn);
-    setTimeout(() => { btn.dataset.confirm = ""; btn.classList.remove("armed"); btn.dataset.tip = "Remove"; }, 3000);
+  // Arms first; a second click within 3s removes. Kept by id, so a re-render doesn't disarm it.
+  const id = btn.dataset.id;
+  clearTimeout(armTimer);
+  if (armedRemove !== id) {
+    armedRemove = id;
+    renderRows();
+    const armed = findButton([id, "remove"]);
+    if (armed) showTip(armed);
+    armTimer = setTimeout(() => { armedRemove = null; renderRows(); }, 3000);
     return;
   }
+  armedRemove = null;
   btn.disabled = true;
   await send("DELETE", "api/streamers/" + encodeURIComponent(btn.dataset.id)).catch((e) => showError(e.message));
   refresh();
@@ -1121,6 +1148,9 @@ function closeEditor() {
 
 $("prio-btn").addEventListener("click", openEditor);
 $("prio-cancel").addEventListener("click", () => { closeEditor(); $("prio-btn").focus(); });
+$("priority").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && draft) $("prio-cancel").click();
+});
 
 $("rules").addEventListener("change", (ev) => {
   const i = Number(ev.target.closest("li").dataset.i);
