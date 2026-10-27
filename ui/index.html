@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#1e1f23">
-<title>points miner</title>
+<title>cyex miner</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.i%7Bfill:%231b1c20%7D.m%7Bfill:%2314e6ff%7D@media (prefers-color-scheme:dark)%7B.i%7Bfill:%23e8e8ea%7D.m%7Bfill:%23145aff%7D%7D%3C/style%3E%3Crect class='i' x='3' y='5' width='15' height='6'/%3E%3Crect class='m' x='10' y='13' width='18' height='6'/%3E%3Crect class='i' x='3' y='21' width='15' height='6'/%3E%3C/svg%3E">
 <script>
   (function () {
@@ -122,6 +122,9 @@
     color: inherit; cursor: pointer; transition: color var(--fast); }
   .th-sort svg.i { width: 12px; height: 12px; stroke-width: 2.25; visibility: hidden; }
   th[aria-sort] .th-sort { color: var(--accent-text); }
+  /* Reset sits in the header row, over the remove buttons; its space is kept so nothing shifts. */
+  .icon-btn.small { width: 24px; height: 24px; margin-block: -4px; }
+  #reset-sort[aria-hidden="true"] { visibility: hidden; }
   th[aria-sort] .th-sort svg.i { visibility: visible; }
 
   /* Checkbox */
@@ -259,6 +262,21 @@
   .tip span { display: block; font-size: .76rem; color: var(--muted); }
   @keyframes tip-in { from { opacity: 0; } }
 
+  /* Confirmation bubble: a popover with an arrow at its button, below it or above when there's no room. */
+  .pop { position: fixed; z-index: var(--z-popover); width: max-content; max-width: min(280px, calc(100vw - 16px));
+    padding: 12px; background: var(--elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: var(--shadow-pop); transform-origin: var(--arrow-x) top; animation: pop-in var(--base) var(--ease); }
+  .pop.above { transform-origin: var(--arrow-x) bottom; }
+  .pop:focus { outline: none; }
+  .pop::before { content: ""; position: absolute; top: -6px; left: var(--arrow-x); width: 10px; height: 10px;
+    background: var(--elevated); border: solid var(--border-strong); border-width: 1px 0 0 1px; transform: rotate(45deg); }
+  .pop.above::before { top: auto; bottom: -6px; border-width: 0 1px 1px 0; }
+  .pop p { margin: 0 0 12px; font-size: var(--text-sub); }
+  .pop-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+  .pop.above { animation-name: pop-in-above; }
+  @keyframes pop-in-above { from { opacity: 0; transform: translateY(4px) scale(.98); } }
+
   /* Toasts */
   .toasts { position: fixed; bottom: 18px; z-index: var(--z-toast); display: flex; flex-direction: column; gap: 8px;
     width: min(420px, calc(100vw - 36px)); }
@@ -291,7 +309,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: 0s !important; }
-    .tip, .toast { animation: none; }
+    .tip, .toast, .pop { animation: none; }
   }
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 150ms; }
   @media (max-width: 720px) {
@@ -316,7 +334,7 @@
         <rect x="10" y="13" width="18" height="6" fill="var(--accent)"/>
         <rect x="3" y="21" width="15" height="6" fill="var(--mark-ink)"/>
       </svg>
-      <span class="wordmark">points miner</span>
+      <span class="wordmark">miner</span>
     </h1>
     <div class="bar-right">
       <span id="user" class="user">Connecting…</span>
@@ -361,8 +379,6 @@
         <header>
           <h2>Channels</h2>
           <div class="tools">
-            <button class="btn secondary small" id="reset-sort" type="button" data-tip="Back to list order"
-              data-hint="Sorting only changes this view">Reset</button>
             <button class="icon-btn lock" id="lock-btn" type="button"></button>
           </div>
         </header>
@@ -372,12 +388,12 @@
             <thead><tr>
               <th class="grip"><span class="sr-only">Move</span></th>
               <th class="num label" title="Place in the list">#</th>
-              <th class="label">Channel</th>
+              <th class="label" data-sort="order"><button class="th-sort" type="button">Channel</button></th>
               <th class="num label" data-sort="points"><button class="th-sort" type="button">Points</button></th>
               <th class="num label hide-xs" data-sort="session"><button class="th-sort" type="button">Session</button></th>
               <th class="num label hide-sm" data-sort="watched"><button class="th-sort" type="button">Watched</button></th>
               <th class="num label hide-sm" data-sort="streak"><button class="th-sort" type="button">Streak</button></th>
-              <th></th>
+              <th class="actions"><button class="icon-btn small" id="reset-sort" type="button"></button></th>
             </tr></thead>
             <tbody id="rows"></tbody>
           </table>
@@ -445,6 +461,13 @@
 <div class="toasts notices" id="notices" aria-live="polite"></div>
 <div class="toasts errors" id="errors" aria-live="assertive"></div>
 <div class="tip" id="tip" role="tooltip" hidden></div>
+<div class="pop" id="remove-pop" role="dialog" aria-labelledby="remove-pop-text" tabindex="-1" hidden>
+  <p id="remove-pop-text"></p>
+  <div class="pop-actions">
+    <button type="button" class="btn ghost small" id="remove-cancel">Cancel</button>
+    <button type="button" class="btn danger small" id="remove-confirm">Remove</button>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -472,6 +495,7 @@ const ICON = {
   moon: svg('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'),
   x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
   trash: svg('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  reset: svg('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'),
   tv: svg('<rect width="20" height="15" x="2" y="7" rx="2"/><path d="m17 2-5 5-5-5"/>'),
   award: svg('<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>'),
 };
@@ -501,8 +525,6 @@ let authed = null;
 let status = null;        // the last status from the server
 let drag = null;          // the row being dragged, see startDrag()
 let savingOrder = false;
-let armedRemove = null;   // id of the channel whose Remove button waits for a second click
-let armTimer = 0;
 let draft = null;         // [{ rule, on }] while the watch priority editor is open
 // Reordering is locked by default, so a stray drag can't change the order. Both settings are per browser.
 let orderLocked = true;
@@ -704,8 +726,9 @@ function rowHtml({ s, pos }, i) {
     <td class="num hide-xs ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
     <td class="num hide-sm">${s.online ? fmt(Math.floor(s.minutes_watched)) + "m" : "–"}</td>
     <td class="num hide-sm">${s.watch_streak == null ? "–" : fmt(s.watch_streak)}</td>
-    <td class="actions"><button class="icon-btn remove ${armedRemove === s.id ? "armed" : ""}" type="button" data-id="${esc(s.id)}"
-      data-tip="${armedRemove === s.id ? "Click again to remove" : "Remove"}" aria-label="Remove ${esc(s.username)}">${ICON.trash}</button></td>
+    <td class="actions"><button class="icon-btn remove ${confirmRemove === s.id ? "armed" : ""}" type="button" data-id="${esc(s.id)}"
+      ${confirmRemove === s.id ? "" : 'data-tip="Remove"'} aria-label="Remove ${esc(s.username)}" aria-haspopup="dialog"
+      aria-expanded="${confirmRemove === s.id}">${ICON.trash}</button></td>
   </tr>`;
 }
 
@@ -727,6 +750,7 @@ function renderRows() {
     const el = findButton(tipped);
     if (el) showTip(el); else hideTip();
   }
+  if (confirmRemove) placeRemovePop();
 }
 
 // Identifies a row button across re-renders: [channel id, kind].
@@ -747,7 +771,7 @@ function renderListHint() {
   if (crowded) {
     hint.textContent = `${liveStarred} starred channels are live, but Twitch only counts 2 at a time. The ones higher in the list win.`;
   } else if (sortKey !== "order") {
-    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; Reset goes back to list order.";
+    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; click Channel to go back to list order.";
   } else {
     hint.textContent = orderLocked
       ? "Unlock the order to drag channels into place. Higher channels win ties in every watch priority rule."
@@ -757,19 +781,31 @@ function renderListHint() {
 
 function applySortState() {
   const [field, dir] = sortKey.split("-");
+  // Read first: the browser drops focus from the reset button as soon as it turns invisible.
+  const resetFocused = sortKey === "order" && document.activeElement === $("reset-sort");
   for (const th of document.querySelectorAll("th[data-sort]")) {
     const btn = th.querySelector("button");
     const on = th.dataset.sort === field;
-    if (on) th.setAttribute("aria-sort", dir === "asc" ? "ascending" : "descending"); else th.removeAttribute("aria-sort");
-    // The arrow shows the current direction, or on hover the one a click picks (highest first).
     const label = btn.textContent;
-    btn.innerHTML = (on && dir === "asc" ? ICON.up : ICON.down) + esc(label);
-    btn.dataset.tip = !on ? `Sort by ${label.toLowerCase()}` : dir === "asc" ? "Lowest first" : "Highest first";
-    btn.dataset.hint = on ? "Click to flip" : "Highest first";
+    if (th.dataset.sort === "order") {
+      // Channel: the list order, which has no direction.
+      if (on) th.setAttribute("aria-sort", "other"); else th.removeAttribute("aria-sort");
+      btn.dataset.tip = on ? "Sorted by list order" : "Sort by list order";
+      btn.dataset.hint = "The order watch priority ties follow";
+    } else {
+      if (on) th.setAttribute("aria-sort", dir === "asc" ? "ascending" : "descending"); else th.removeAttribute("aria-sort");
+      // The arrow shows the current direction, or on hover the one a click picks (highest first).
+      btn.innerHTML = (on && dir === "asc" ? ICON.up : ICON.down) + esc(label);
+      btn.dataset.tip = !on ? `Sort by ${label.toLowerCase()}` : dir === "asc" ? "Lowest first" : "Highest first";
+      btn.dataset.hint = on ? "Click to flip" : "Highest first";
+    }
     if (btn === tipAnchor) showTip(btn);
   }
-  // Reset takes the lock's place: reordering only works in list order.
-  $("reset-sort").hidden = sortKey === "order";
+  // Only there while sorted; the space stays so the header row doesn't shift.
+  const reset = $("reset-sort");
+  const sorted = sortKey !== "order";
+  reset.setAttribute("aria-hidden", String(!sorted));
+  reset.tabIndex = sorted ? 0 : -1;
 
   const lock = $("lock-btn");
   $("channels").classList.toggle("no-reorder", !canReorder());
@@ -777,6 +813,8 @@ function applySortState() {
   lock.setAttribute("aria-pressed", String(orderLocked));
   labelButton(lock, orderLocked ? ICON.lock : ICON.unlock, orderLocked ? "Order locked" : "Order unlocked",
     orderLocked ? "Click to reorder channels by dragging" : "Click to lock the order so it can't change by accident");
+  // The reset button just went invisible: keep keyboard focus on the lock that took over.
+  if (resetFocused) lock.focus();
   renderListHint();
 }
 
@@ -948,34 +986,83 @@ $("rows").addEventListener("click", async (ev) => {
   }
   const btn = ev.target.closest("button.remove");
   if (!btn) return;
-  // Arms first; a second click within 3s removes. Kept by id, so a re-render doesn't disarm it.
-  const id = btn.dataset.id;
-  clearTimeout(armTimer);
-  if (armedRemove !== id) {
-    armedRemove = id;
-    renderRows();
-    const armed = findButton([id, "remove"]);
-    if (armed) showTip(armed);
-    armTimer = setTimeout(() => { armedRemove = null; renderRows(); }, 3000);
-    return;
-  }
-  armedRemove = null;
-  btn.disabled = true;
-  await send("DELETE", "api/streamers/" + encodeURIComponent(btn.dataset.id)).catch((e) => showError(e.message));
-  refresh();
+  // Clicking the same trash button again closes the bubble, so a double click never removes.
+  if (confirmRemove === btn.dataset.id) closeRemovePop(); else openRemovePop(btn.dataset.id);
 });
 
+// === Remove confirmation === //
+// A bubble next to the trash button (never over it), so confirming takes a deliberate second
+// click somewhere else. It follows its button through the 2s re-renders.
+
+let confirmRemove = null;  // id of the channel the bubble asks about
+
+function placeRemovePop() {
+  const btn = findButton([confirmRemove, "remove"]);
+  if (!btn) return closeRemovePop();
+  const pop = $("remove-pop");
+  const a = btn.getBoundingClientRect(), p = pop.getBoundingClientRect();
+  const left = Math.min(Math.max(8, a.right + 6 - p.width), innerWidth - p.width - 8);
+  const below = a.bottom + 10 + p.height < innerHeight - 8;
+  pop.classList.toggle("above", !below);
+  pop.style.left = left + "px";
+  pop.style.top = (below ? a.bottom + 10 : a.top - 10 - p.height) + "px";
+  pop.style.setProperty("--arrow-x", a.left + a.width / 2 - left - 5 + "px");
+}
+
+function openRemovePop(id) {
+  closeRemovePop();
+  const s = status.streamers.find((x) => x.id === id);
+  if (!s) return;
+  confirmRemove = id;
+  $("remove-pop-text").textContent = s.source === "badge"
+    ? `Remove ${s.username}? It was only added for a badge drop.`
+    : `Remove ${s.username}? It won't come back from your follow list.`;
+  hideTip();
+  $("remove-pop").hidden = false;
+  renderRows();
+  placeRemovePop();
+  $("remove-confirm").focus({ preventScroll: true });
+}
+
+function closeRemovePop(returnFocus = false) {
+  if (!confirmRemove) return;
+  const id = confirmRemove;
+  confirmRemove = null;
+  $("remove-pop").hidden = true;
+  renderRows();
+  if (returnFocus) findButton([id, "remove"])?.focus();
+}
+
+$("remove-confirm").addEventListener("click", async () => {
+  const id = confirmRemove;
+  closeRemovePop();
+  await send("DELETE", "api/streamers/" + encodeURIComponent(id)).catch((e) => showError(e.message));
+  refresh();
+});
+$("remove-cancel").addEventListener("click", () => closeRemovePop(true));
+$("remove-pop").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeRemovePop(true);
+});
+// Clicking anywhere else, or tabbing out, closes it.
+document.addEventListener("pointerdown", (ev) => {
+  if (confirmRemove && !ev.target.closest("#remove-pop, button.remove")) closeRemovePop();
+});
+$("remove-pop").addEventListener("focusout", (ev) => {
+  if (confirmRemove && !ev.relatedTarget?.closest("#remove-pop, button.remove")) closeRemovePop();
+});
+addEventListener("scroll", () => { if (confirmRemove) placeRemovePop(); }, true);
+addEventListener("resize", () => { if (confirmRemove) placeRemovePop(); });
+
 // A header click sorts by that column, highest first; clicking it again flips the direction.
+// Channel goes back to list order.
 document.querySelector("#channels thead").addEventListener("click", (ev) => {
   const field = ev.target.closest("th[data-sort]")?.dataset.sort;
   if (!field) return;
   const [current, dir] = sortKey.split("-");
-  setSort(`${field}-${current === field && dir === "desc" ? "asc" : "desc"}`);
+  setSort(field === "order" ? "order" : `${field}-${current === field && dir === "desc" ? "asc" : "desc"}`);
 });
-$("reset-sort").addEventListener("click", () => {
-  setSort("order");
-  $("lock-btn").focus();
-});
+labelButton($("reset-sort"), ICON.reset, "Back to list order", "Sorting only changes this view");
+$("reset-sort").addEventListener("click", () => setSort("order"));
 
 $("lock-btn").addEventListener("click", () => {
   orderLocked = !orderLocked;
