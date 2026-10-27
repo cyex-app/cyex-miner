@@ -94,7 +94,9 @@ impl Stream {
     pub fn update_minute_watched(&mut self) {
         let now = now();
         if self.minute_watched_timestamp != 0.0 {
-            self.minute_watched += (now - self.minute_watched_timestamp) / 60.0;
+            // Capped at a minute: watches are ~20s apart, and a longer gap means the stream lost its
+            // watch slot for a while, which mustn't count towards the watch streak.
+            self.minute_watched += ((now - self.minute_watched_timestamp) / 60.0).min(1.0);
         }
         self.minute_watched_timestamp = now;
     }
