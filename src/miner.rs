@@ -654,7 +654,9 @@ impl Miner {
 
     fn update_chat(&self, streamer: &Streamer) {
         let online = streamer.state().is_online;
+        // A check that finishes after the channel was removed mustn't rejoin its chat.
         let join = !self.paused()
+            && self.find_by_channel(&streamer.channel_id).is_some()
             && match streamer.settings.chat {
                 ChatPresence::Always => true,
                 ChatPresence::Never => false,
@@ -753,6 +755,10 @@ impl Miner {
     async fn watch_loop(self: Arc<Self>) {
         loop {
             if self.paused() {
+                // Pausing mid-pass can leave flags set below; nothing is watched while paused.
+                for s in self.streamers() {
+                    s.state().watching = false;
+                }
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
