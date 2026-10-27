@@ -3,269 +3,450 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Points Miner</title>
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#1e1f23">
+<title>points miner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.i%7Bfill:%231b1c20%7D.m%7Bfill:%2314e6ff%7D@media (prefers-color-scheme:dark)%7B.i%7Bfill:%23e8e8ea%7D.m%7Bfill:%23145aff%7D%7D%3C/style%3E%3Crect class='i' x='3' y='5' width='15' height='6'/%3E%3Crect class='m' x='10' y='13' width='18' height='6'/%3E%3Crect class='i' x='3' y='21' width='15' height='6'/%3E%3C/svg%3E">
+<script>
+  (function () {
+    try { if (localStorage.getItem('cyexTheme') === 'light') document.documentElement.dataset.theme = 'light'; } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
+  /* cyex app tokens (dense web tool). Use only these values. */
   :root {
-    --bg: #f6f6f8; --panel: #ffffff; --text: #18181b; --muted: #6b6b76; --border: #e4e4e9;
-    --accent: #9147ff; --accent-text: #ffffff; --live: #e91916; --ok: #1f9d55; --danger: #c62828;
-    --row-hover: #f2f0fa; --star: #e8a400;
-    --radius: 6px; --radius-sm: 4px;
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0e0e10; --panel: #18181b; --text: #efeff1; --muted: #a0a0ab; --border: #2c2c33;
-      --accent: #a970ff; --accent-text: #0e0e10; --live: #ff4d4a; --ok: #3ccf7f; --danger: #ff6b6b;
-      --row-hover: #212127; --star: #ffc531;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  h1 { font-size: 20px; margin: 0; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
-  code { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
-  .muted { color: var(--muted); }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 16px; }
-  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
-  .stat .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .stat .l { color: var(--muted); font-size: 12px; }
+    color-scheme: dark;
+    --bg: #1e1f23; --surface: #26272c; --surface-hover: #2d2e34; --elevated: #2f3037; --elevated-2: #353640;
+    --border: #34353c; --border-strong: #43454d;
+    --text: #e8e8ea; --muted: #b4b5bb; --dim: #9fa1a9; --neutral-chip: #34353c;
+    --row-hover: rgba(255, 255, 255, .035); --row-alt: rgba(255, 255, 255, .015);
+    --shadow: rgba(0, 0, 0, .35);
+    --accent: #145aff; --accent-2: #2a6aff; --accent-text: #7ea4ff; --accent-ink: #ffffff;
+    --accent-dim: rgba(20, 90, 255, .14); --accent-border: rgba(20, 90, 255, .55);
+    --red: #ff6b6b; --yellow: #ffb545; --green: #33d68f; --gold: #ffd45e;
+    --shadow-pop: 0 8px 24px var(--shadow);
+    --focus-ring: var(--text);
 
-  /* Controls */
-  form { display: flex; gap: 8px; }
-  input[type=text], input[type=password] { flex: 1; min-width: 0; padding: 9px 12px; border-radius: var(--radius-sm);
-    border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
-  input[type=text]:focus, input[type=password]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-  button { padding: 9px 16px; border-radius: var(--radius-sm); border: 1px solid transparent; background: var(--accent);
-    color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer;
-    transition: transform 160ms var(--ease-out), border-color 150ms ease, color 150ms ease, background-color 150ms ease; }
-  button:active:not(:disabled):not(.handle) { transform: scale(.97); }
-  button:disabled { opacity: .6; cursor: default; }
-  button:focus-visible, select:focus-visible, input[type=checkbox]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  button.secondary { background: transparent; color: var(--text); border-color: var(--border); font-weight: 500; }
-  button.danger, button.remove { background: transparent; color: var(--danger); border-color: var(--border); font-weight: 500; }
-  button.remove { padding: 5px 10px; }
-  button.small { padding: 4px 10px; font-size: 12px; }
-  button[aria-pressed="false"].lock, button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
-  button.icon { display: inline-grid; place-items: center; background: transparent; color: var(--muted); border: 0;
-    padding: 4px; line-height: 0; font-weight: 400; }
-  button.icon svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  select { padding: 4px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--panel);
-    color: var(--text); font: inherit; font-size: 12px; }
-  label.sort { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
-  .msg { margin-top: 8px; min-height: 1.2em; font-size: 13px; }
-  .msg.err { color: var(--danger); } .msg.ok { color: var(--ok); }
-  .hint { margin: -4px 0 10px; font-size: 12px; }
-  .warn { color: var(--star); }
-  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .panel-head h2 { margin: 0; }
-  .head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-  .header-right { display: flex; align-items: center; gap: 10px; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    --font-ui: 'IBM Plex Sans', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Cascadia Mono', ui-monospace, Consolas, monospace;
+    --text-sub: .85rem; --text-hint: .78rem; --text-label: .68rem;
+    --page-max: 1520px; --page-pad: 20px; --measure-form: 640px;
+    --radius: 3px; --radius-sm: 2px;
+    --fast: .12s; --base: .2s; --slow: .36s; --ease: cubic-bezier(.16, 1, .3, 1);
+    --z-popover: 300; --z-tooltip: 390; --z-toast: 600;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f3f3f4; --surface: #ffffff; --surface-hover: #f6f6f7; --elevated: #ffffff; --elevated-2: #f4f4f6;
+    --border: #dcdde1; --border-strong: #c4c6cc;
+    --text: #1b1c20; --muted: #4f515a; --dim: #6b6d76; --neutral-chip: #e6e7ea;
+    --row-hover: rgba(20, 22, 30, .035); --row-alt: rgba(20, 22, 30, .015);
+    --shadow: rgba(20, 22, 30, .12);
+    --accent: #14e6ff; --accent-2: #10c9e6; --accent-text: #046a82; --accent-ink: #00232b;
+    --accent-dim: rgba(4, 106, 130, .08); --accent-border: rgba(4, 106, 130, .4);
+    --red: #c1352f; --yellow: #9a5c05; --green: #0f8a55; --gold: #7d5a00;
+  }
+
+  /* Base */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scrollbar-gutter: stable; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: .87rem/1.55 var(--font-ui);
+    -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  a { color: var(--accent-text); }
+  ::selection { background: var(--border-strong); }
+  :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+  [hidden] { display: none !important; }
+  code { font: .86em var(--font-mono); background: var(--row-hover); border-radius: var(--radius); padding: .12em .4em; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .wrap { width: 100%; max-width: var(--page-max); margin-inline: auto; padding-inline: var(--page-pad); }
+  .label { font-size: var(--text-label); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .dim { color: var(--dim); }
+  .hint { margin: 0; font-size: var(--text-hint); color: var(--dim); }
+  svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round;
+    stroke-linejoin: round; flex-shrink: 0; }
+
+  /* Header */
+  .top { position: sticky; top: 0; z-index: 9; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .bar { display: flex; align-items: center; gap: 12px; min-height: 63px; padding-block: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.05rem; font-weight: 700; white-space: nowrap; }
+  .mark { --mark-ink: var(--text); flex-shrink: 0; }
+  .bar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .user { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user b { color: var(--text); font-weight: 600; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 11.5px 20px;
+    border: 1px solid transparent; border-radius: var(--radius); font-size: .87rem; font-weight: 600; line-height: 1;
+    white-space: nowrap; cursor: pointer; transition: background-color var(--fast), border-color var(--fast), color var(--fast); }
+  .btn.small { padding: 7px 13px; font-size: .78rem; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .btn.secondary { background: var(--surface); border-color: var(--border-strong); }
+  .btn.ghost { background: none; color: var(--muted); }
+  .btn.danger { background: var(--surface); border-color: var(--border-strong); color: var(--red); }
+  .btn.armed, .icon-btn.armed, .icon-btn.armed:hover { background: color-mix(in srgb, var(--red) 14%, transparent); border-color: var(--red); color: var(--red); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .icon-btn { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0;
+    border-radius: var(--radius); background: transparent; color: var(--muted); cursor: pointer;
+    transition: background-color var(--fast), color var(--fast); }
+  .icon-btn:active, .btn.ghost:active { opacity: .6; transition: none; }
+  .icon-btn { flex-shrink: 0; }
+  .icon-btn:disabled { opacity: .4; cursor: default; }
+  .icon-btn[aria-pressed="true"].lock { color: var(--text); }
+  .icon-btn.toggle { width: 37px; height: 37px; border: 1px solid var(--border-strong); }
+  .icon-btn.star.on { color: var(--gold); }
+  .icon-btn.star.on svg { fill: currentColor; }
+
+  /* Fields */
+  .field { width: 100%; min-width: 0; padding: 11px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius); outline: none; font-size: .89rem; transition: border-color var(--fast), background-color var(--fast); }
+  .field::placeholder { color: var(--dim); }
+  .field:focus { border-color: var(--accent-border); background: var(--surface-hover); }
+  .field:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .inline-form { display: flex; gap: 8px; }
+  .inline-form .field { flex: 1; }
+
+  /* Segmented control */
+  .seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+  .seg button { height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-sm); background: none;
+    color: var(--muted); font-size: .8rem; font-weight: 600; white-space: nowrap; cursor: pointer; transition: color var(--fast); }
+  .seg button[aria-checked="true"] { background: var(--accent-dim); color: var(--accent-text); }
+  .seg button:focus-visible { outline-offset: -2px; }
+
+  /* Checkbox */
+  input[type=checkbox] { appearance: none; display: grid; place-items: center; width: 16px; height: 16px; margin: 0;
+    flex-shrink: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+  input[type=checkbox]::after { content: ""; width: 9px; height: 5px; margin-top: -2px; border: solid var(--accent-ink);
+    border-width: 0 0 2px 2px; transform: rotate(-45deg); opacity: 0; }
+  input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
+  input[type=checkbox]:checked::after { opacity: 1; }
+
+  /* Chips */
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
+    background: var(--neutral-chip); color: var(--muted); font-size: .62rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; white-space: nowrap; vertical-align: 1px; }
+  .chip.live { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .chip.live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip.paused { background: color-mix(in srgb, var(--yellow) 18%, transparent); color: var(--yellow); }
+
+  /* Layout */
+  main.wrap { padding-top: 26px; padding-bottom: 60px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; margin-top: 16px; }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .card { background: var(--surface); border: 1px solid var(--border); min-width: 0; }
+  .card > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 46px; padding: 8px 12px 8px 16px;
+    border-bottom: 1px solid var(--border); }
+  .card > header h2 { margin: 0; flex: 1; font-size: .8rem; font-weight: 700; white-space: nowrap; }
+  .card > header h2 .dim { font-weight: 600; margin-left: 4px; }
+  .card .body { padding: 16px; }
+  .tools { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+  .narrow { max-width: var(--measure-form); margin-inline: auto; }
+
+  /* Status line */
+  .status-line { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); }
+  .stat { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+  .stat .v { font: 600 1.05rem/1.3 var(--font-mono); font-variant-numeric: tabular-nums; }
+  .stat .v.gain { color: var(--green); }
 
   /* Channel table */
+  .list-hint { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  .list-hint.warn { color: var(--yellow); }
+  .table-scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
-  tr:last-child td { border-bottom: 0; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.pos, th.pos { width: 1%; color: var(--muted); }
-  .name { font-weight: 600; overflow-wrap: anywhere; }
-  .name a { color: inherit; text-decoration: none; }
-  .name-row { display: flex; align-items: flex-start; gap: 8px; }
+  th { padding: 8px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr.alt { background: var(--row-alt); }
+  tbody tr.watching { box-shadow: inset 3px 0 0 var(--accent); }
+  th:first-child, td:first-child { padding-left: 12px; }
+  th:last-child, td:last-child { padding-right: 12px; }
+  .num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  th.num { font-family: var(--font-ui); }
+  td.num { font-size: .82rem; }
+  td.pos { color: var(--dim); width: 1%; }
+  td.gain { color: var(--green); }
+  .name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .name-row > div { min-width: 0; }
-  .sub { color: var(--muted); font-size: 12px; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gain { color: var(--ok); }
-  .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px;
-    vertical-align: 1px; white-space: nowrap; }
-  .badge.live { background: var(--live); color: #fff; }
-  .badge.watch { background: var(--accent); color: var(--accent-text); }
-  .badge.prio { background: var(--star); color: #18181b; }
-  .badge.follow { border: 1px solid var(--border); color: var(--muted); font-weight: 500; }
-  .badge.paused { background: var(--danger); color: #fff; margin-left: 0; }
-  button.star { padding: 2px; flex-shrink: 0; }
-  button.star svg { stroke-width: 1.2; }
-  button.star.on { color: var(--star); }
-  button.star.on svg { fill: currentColor; }
-  .empty { text-align: center; color: var(--muted); padding: 24px; }
+  .name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
+  .name a { color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+  /* Takes the spare width and ellipsizes, so the number columns never get pushed out. */
+  td.channel { width: 100%; max-width: 0; min-width: 160px; }
+  .sub { color: var(--dim); font-size: var(--text-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px 16px; color: var(--dim); text-align: center; }
+  .empty svg.i { width: 28px; height: 28px; }
+  td.actions { width: 1%; text-align: right; }
 
   /* Drag to reorder */
-  td.grip { width: 28px; padding-left: 2px; padding-right: 0; }
+  td.grip { width: 1%; padding-right: 0; }
   #channels.no-reorder .grip { display: none; }
-  button.handle { cursor: grab; touch-action: none; padding: 4px 6px; }
-  button.handle svg { fill: currentColor; stroke: none; }
-  tbody tr.dragging { position: relative; z-index: 2; box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
-  tbody tr.dragging td { background: var(--panel); }
-  tbody tr.dragging button.handle { cursor: grabbing; color: var(--accent); }
+  .icon-btn.handle { cursor: grab; touch-action: none; }
+  tbody tr.dragging { position: relative; z-index: 2; background: var(--elevated); box-shadow: var(--shadow-pop); }
+  tbody tr.dragging .handle { cursor: grabbing; color: var(--text); }
   body.is-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; }
 
-  /* Watch priority editor */
-  .editor { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
-  .editor p { margin: 0 0 10px; font-size: 12px; }
-  #rules { list-style: none; margin: 0 0 12px; padding: 0; }
-  .rule { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border); }
-  .rule:last-child { border-bottom: 0; }
-  .rule-n { width: 1.5em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
-  .rule-body { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
-  .rule-body input { margin: 3px 0 0; accent-color: var(--accent); flex-shrink: 0; }
+  /* Watch priority */
+  .rules { list-style: none; margin: 0; padding: 0; }
+  .rule { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .rule:first-child { padding-top: 0; }
+  .rule:last-child { border-bottom: 0; padding-bottom: 0; }
+  .rule-n { width: 16px; flex-shrink: 0; text-align: right; color: var(--dim); font: 600 .74rem/1.85 var(--font-mono); }
+  .rule-body { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
+  label.rule-body { cursor: pointer; }
+  label.rule-body input { margin-top: 2px; }
   .rule-name { display: block; font-weight: 600; }
-  .rule-desc { display: block; color: var(--muted); font-size: 12px; }
+  .rule-desc { display: block; color: var(--dim); font-size: var(--text-hint); }
   .rule.off .rule-name { color: var(--muted); font-weight: 500; }
-  .rule-move { display: flex; flex-shrink: 0; }
+  .rule-move { display: flex; flex-shrink: 0; margin-top: -4px; }
+  .editor-foot { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 
-  /* Activity, login, web access */
-  #events { max-height: 340px; overflow-y: auto; font: 12px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
-  #events div { padding: 1px 0; } #events time { color: var(--muted); margin-right: 8px; }
-  .login { text-align: center; padding: 28px 16px; }
-  .login .code { font: 600 34px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .15em; margin: 12px 0; color: var(--accent); }
-  .login a { color: var(--accent); }
-  #auth form { max-width: 420px; margin: 14px auto 0; }
-  .token { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
-  .token code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 8px 10px; border-radius: var(--radius-sm);
-    background: var(--bg); border: 1px solid var(--border); font-size: 13px; }
+  /* Activity log */
+  #events { height: 360px; overflow-y: auto; overscroll-behavior: contain; font-size: .8rem; }
+  .log-row { display: flex; gap: 10px; padding: 4px 16px; line-height: 1.5; }
+  .log-row.alt { background: var(--row-alt); }
+  .log-row time { flex-shrink: 0; color: var(--dim); font: 600 .72rem/1.65 var(--font-mono); font-variant-numeric: tabular-nums; user-select: none; }
+  .log-row span { min-width: 0; overflow-wrap: anywhere; }
+
+  /* Sign-in states, web access */
+  .center { text-align: center; }
+  .code { margin: 16px 0; font: 600 2rem/1.2 var(--font-mono); letter-spacing: .15em; }
+  .auth-form { margin-top: 16px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .token { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .token code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 10px 12px; background: var(--bg);
+    border: 1px solid var(--border); font-size: .82rem; }
+  .msg { margin: 8px 0 0; min-height: 1.4em; font-size: var(--text-sub); }
+  .msg.err { color: var(--red); }
+
+  footer.wrap { padding-bottom: 24px; }
+
+  /* Tooltip */
+  .tip { position: fixed; z-index: var(--z-tooltip); max-width: 260px; padding: 6px 9px; pointer-events: none;
+    background: var(--elevated-2); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: var(--shadow-pop); animation: tip-in var(--fast) ease-out; }
+  .tip b { display: block; font-size: .8rem; font-weight: 600; }
+  .tip span { display: block; font-size: .76rem; color: var(--muted); }
+  @keyframes tip-in { from { opacity: 0; } }
+
+  /* Toasts */
+  .toasts { position: fixed; bottom: 18px; z-index: var(--z-toast); display: flex; flex-direction: column; gap: 8px;
+    width: min(420px, calc(100vw - 36px)); }
+  .toasts.notices { right: 18px; }
+  .toasts.errors { left: 18px; }
+  .toast { position: relative; overflow: hidden; padding: 12px 30px 14px 14px; background: var(--elevated);
+    border: 1px solid var(--border-strong); border-left: 3px solid var(--border-strong); box-shadow: var(--shadow-pop);
+    font-size: var(--text-sub); animation: toast-in var(--base) var(--ease); }
+  .toasts.notices .toast { --from: 16px; }
+  .toasts.errors .toast { --from: -16px; border-left-color: var(--red); }
+  .toast .x { position: absolute; top: 8px; right: 6px; width: 18px; height: 18px; }
+  .toast .x svg.i { width: 12px; height: 12px; }
+  .toast .drain { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--border-strong);
+    transform-origin: left; animation: drain linear forwards; }
+  .toast:hover .drain, .toast:focus-within .drain { animation-play-state: paused; }
+  @keyframes toast-in { from { opacity: 0; transform: translateX(var(--from)) scale(.98); } }
+  @keyframes drain { to { transform: scaleX(0); } }
 
   @media (hover: hover) and (pointer: fine) {
-    body:not(.is-dragging) tbody tr:hover { background: var(--row-hover); }
-    .name a:hover { text-decoration: underline; }
-    button.secondary:hover { border-color: var(--muted); }
-    button.danger:hover, button.remove:hover { border-color: var(--danger); }
-    button.icon:hover:not(:disabled) { color: var(--text); background: var(--row-hover); }
-    button.star:hover { color: var(--star); background: transparent; }
+    .btn.primary:hover:not(:disabled) { background: var(--accent-2); }
+    .btn.secondary:hover:not(:disabled), .btn.danger:hover:not(:disabled) { background: var(--surface-hover); }
+    .btn.ghost:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+    .icon-btn:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+    .icon-btn.star:hover { color: var(--gold); }
+    .seg button:hover { color: var(--text); }
+    body:not(.is-dragging) tbody tr:hover { background: var(--row-hover); box-shadow: inset 2px 0 0 var(--border-strong); }
+    body:not(.is-dragging) tbody tr.watching:hover { box-shadow: inset 3px 0 0 var(--accent); }
+    .name a:hover { text-decoration: underline; text-underline-offset: 2px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    button:active:not(:disabled) { transform: none; }
+    *, *::before, *::after { transition-duration: 0s !important; }
+    .tip, .toast { animation: none; }
   }
-  @media (max-width: 640px) {
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 150ms; }
+  @media (max-width: 720px) {
     .hide-sm { display: none; }
-    .sub { max-width: 180px; }
+    .user { max-width: 40vw; }
   }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Points Miner</h1>
-    <div class="header-right">
-      <span id="user" class="muted">connecting…</span>
-      <button class="secondary small" id="pause-btn" type="button" hidden
-        title="While paused nothing is watched, chats are left and no bonuses, drops or raids are claimed">Pause</button>
+<header class="top">
+  <div class="wrap bar">
+    <h1 class="brand">
+      <svg class="mark" viewBox="3 5 25 22" width="22" height="19" aria-hidden="true">
+        <rect x="3" y="5" width="15" height="6" fill="var(--mark-ink)"/>
+        <rect x="10" y="13" width="18" height="6" fill="var(--accent)"/>
+        <rect x="3" y="21" width="15" height="6" fill="var(--mark-ink)"/>
+      </svg>
+      points miner
+    </h1>
+    <div class="bar-right">
+      <span id="user" class="user">Connecting…</span>
+      <button class="btn secondary small" id="pause-btn" type="button" hidden
+        data-tip="Pause mining" data-hint="Nothing is watched, chats are left and no bonuses, drops or raids are claimed">Pause</button>
+      <button class="icon-btn toggle" id="theme-btn" type="button"></button>
     </div>
-  </header>
+  </div>
+</header>
 
-  <section id="auth" class="panel login" hidden>
-    <div>Enter the web UI login token.</div>
-    <div class="muted">It was printed in the console on first start and is saved in the <code>web_token</code> file next to your config.</div>
-    <form id="auth-form">
-      <input type="password" id="auth-token" placeholder="Login token" autocomplete="current-password" required>
-      <button type="submit" id="auth-btn">Log in</button>
-    </form>
-    <div id="auth-msg" class="msg"></div>
+<main class="wrap">
+  <section id="auth" class="card narrow" hidden>
+    <header><h2>Log in</h2></header>
+    <div class="body">
+      <p class="muted" style="margin:0">Enter the web UI login token. It was printed in the console on first start and is
+        saved in the <code>web_token</code> file next to your config.</p>
+      <form id="auth-form" class="inline-form auth-form">
+        <input class="field" type="password" id="auth-token" placeholder="Login token" autocomplete="current-password" required>
+        <button class="btn primary" type="submit" id="auth-btn">Log in</button>
+      </form>
+      <p id="auth-msg" class="msg"></p>
+    </div>
   </section>
 
-  <section id="login" class="panel login" hidden></section>
+  <section id="login" class="card narrow" hidden>
+    <header><h2>Link your Twitch account</h2></header>
+    <div class="body center" id="login-body"></div>
+  </section>
 
   <div id="dashboard" hidden>
-    <div class="stats">
-      <div class="stat"><div class="v" id="s-channels">0</div><div class="l">Channels</div></div>
-      <div class="stat"><div class="v" id="s-live">0</div><div class="l">Live now</div></div>
-      <div class="stat"><div class="v" id="s-points">0</div><div class="l">Total points</div></div>
-      <div class="stat"><div class="v gain" id="s-gained">0</div><div class="l">Gained this session</div></div>
+    <div class="status-line">
+      <div class="stat"><span class="label">Channels</span><span class="v" id="s-channels">0</span></div>
+      <div class="stat"><span class="label">Live</span><span class="v" id="s-live">0</span></div>
+      <div class="stat"><span class="label">Watching</span><span class="v" id="s-watching">0</span></div>
+      <div class="stat"><span class="label">Total points</span><span class="v" id="s-points">0</span></div>
+      <div class="stat"><span class="label">This session</span><span class="v" id="s-gained">0</span></div>
+      <div class="stat"><span class="label">Uptime</span><span class="v" id="s-uptime">0m</span></div>
     </div>
 
-    <section class="panel">
-      <h2>Add a channel</h2>
-      <form id="add">
-        <input type="text" id="username" placeholder="Twitch username or channel URL" autocomplete="off" required>
-        <button type="submit" id="add-btn">Add</button>
-      </form>
-      <div id="add-msg" class="msg"></div>
-    </section>
-
-    <section class="panel" id="channels">
-      <div class="panel-head">
-        <h2>Channels</h2>
-        <div class="head-actions">
-          <label class="sort">Sort
-            <select id="sort">
-              <option value="order">List order</option>
-              <option value="points-desc">Most points</option>
-              <option value="points-asc">Fewest points</option>
-              <option value="session-desc">Most gained this session</option>
-              <option value="session-asc">Least gained this session</option>
-              <option value="watched-desc">Most watched</option>
-              <option value="watched-asc">Least watched</option>
-              <option value="streak-desc">Longest watch streak</option>
-              <option value="streak-asc">Shortest watch streak</option>
-            </select>
-          </label>
-          <button class="secondary small" id="prio-btn" type="button" aria-expanded="false" aria-controls="prio-editor">Watch priority</button>
-          <button class="secondary small lock" id="lock-btn" type="button"></button>
+    <div class="layout">
+      <section class="card" id="channels">
+        <header>
+          <h2>Channels</h2>
+          <div class="tools">
+            <span class="label hide-sm">Sort</span>
+            <div class="seg" id="sort" role="radiogroup" aria-label="Sort channels by">
+              <button type="button" role="radio" data-sort="order">List order</button>
+              <button type="button" role="radio" data-sort="points">Points</button>
+              <button type="button" role="radio" data-sort="session">Session</button>
+              <button type="button" role="radio" data-sort="watched">Watched</button>
+              <button type="button" role="radio" data-sort="streak">Streak</button>
+            </div>
+            <button class="icon-btn" id="dir-btn" type="button"></button>
+            <button class="icon-btn lock" id="lock-btn" type="button"></button>
+          </div>
+        </header>
+        <p class="hint list-hint" id="list-hint"></p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th class="grip"><span class="sr-only">Move</span></th>
+              <th class="num label" title="Place in the list">#</th>
+              <th class="label">Channel</th>
+              <th class="num label">Points</th>
+              <th class="num label">Session</th>
+              <th class="num label hide-sm">Watched</th>
+              <th class="num label hide-sm" title="Current watch streak">Streak</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
         </div>
+      </section>
+
+      <div class="side">
+        <section class="card">
+          <header><h2>Add a channel</h2></header>
+          <div class="body">
+            <form id="add" class="inline-form">
+              <input class="field" type="text" id="username" placeholder="Twitch username or channel URL" autocomplete="off" required>
+              <button class="btn primary" type="submit" id="add-btn">Add</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="card" id="priority">
+          <header>
+            <h2>Watch priority</h2>
+            <button class="btn secondary small" id="prio-btn" type="button" aria-expanded="false">Edit</button>
+          </header>
+          <div class="body">
+            <p class="hint" id="prio-hint" style="margin-bottom:12px">Twitch counts 2 streams at a time. Rules are tried from the
+              top until both slots are taken; channels higher in the list win ties.</p>
+            <ol class="rules" id="rules"></ol>
+            <div class="editor-foot" id="prio-foot" hidden>
+              <button type="button" class="btn primary small" id="prio-save">Save</button>
+              <button type="button" class="btn secondary small" id="prio-cancel">Cancel</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <header><h2>Activity</h2></header>
+          <div id="events" role="log" aria-live="off"></div>
+        </section>
       </div>
-
-      <div class="editor" id="prio-editor" hidden>
-        <p class="muted">Twitch counts 2 streams at a time. The rules are tried from the top until both slots are
-          taken; channels higher in the list win ties. Untick a rule to skip it.</p>
-        <ol id="rules"></ol>
-        <div class="actions">
-          <button type="button" class="small" id="prio-save">Save</button>
-          <button type="button" class="secondary small" id="prio-cancel">Cancel</button>
-        </div>
-        <div id="prio-msg" class="msg"></div>
-      </div>
-
-      <p class="hint muted" id="prio-summary"></p>
-      <p class="hint muted" id="list-hint"></p>
-      <table>
-        <thead><tr>
-          <th class="grip"></th><th class="num pos" title="Place in the list">#</th><th>Channel</th>
-          <th class="num">Points</th><th class="num">Session</th><th class="num hide-sm">Watched</th>
-          <th class="num hide-sm" title="Current watch streak">Streak</th><th></th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </section>
-
-    <section class="panel">
-      <h2>Activity</h2>
-      <div id="events"></div>
-    </section>
+    </div>
   </div>
 
-  <section class="panel" id="access" hidden>
-    <h2>Web access</h2>
-    <p class="hint muted">If your login token leaked, regenerate it. Every other browser gets logged out and needs the new token.</p>
-    <div class="actions">
-      <button class="danger" id="regen-btn">Regenerate login token</button>
-      <button class="secondary" id="logout-btn">Log out</button>
+  <section class="card" id="access" style="margin-top:16px" hidden>
+    <header><h2>Web access</h2></header>
+    <div class="body stack">
+      <p class="hint">If your login token leaked, regenerate it. Every other browser is logged out and needs the new token.</p>
+      <div class="actions">
+        <button class="btn danger small" id="regen-btn" type="button">Regenerate login token</button>
+        <button class="btn secondary small" id="logout-btn" type="button">Log out</button>
+      </div>
+      <div id="new-token" class="token" hidden>
+        <code id="new-token-value"></code>
+        <button class="btn secondary small" id="copy-btn" type="button">Copy</button>
+      </div>
     </div>
-    <div id="new-token" class="token" hidden>
-      <code id="new-token-value"></code>
-      <button class="secondary" id="copy-btn">Copy</button>
-    </div>
-    <div id="access-msg" class="msg"></div>
   </section>
 </main>
+
+<footer class="wrap"><p class="hint">Not affiliated with, endorsed by, or sponsored by Twitch.</p></footer>
+
+<div class="toasts notices" id="notices" aria-live="polite"></div>
+<div class="toasts errors" id="errors" aria-live="assertive"></div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const fmt = (n) => Number(n).toLocaleString();
+// cyex formats: 1.000.000, 2026/10/23, 24-hour time.
+const fmt = (n) => Number(n).toLocaleString("de-DE");
 const signed = (n) => (n > 0 ? "+" : "") + fmt(n);
+const pad = (n) => String(n).padStart(2, "0");
+const fmtTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+const fmtDate = (d) => `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const MAX_LOG_LINES = 300;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
-const SLIDE = "transform 160ms cubic-bezier(0.23, 1, 0.32, 1)";
+const SLIDE = "transform .2s cubic-bezier(.16, 1, .3, 1)";
 
+// Lucide paths, 24 grid.
+const svg = (d) => `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 const ICON = {
-  grip: '<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><circle cx="3" cy="3" r="1.25"/><circle cx="7" cy="3" r="1.25"/>'
-    + '<circle cx="3" cy="8" r="1.25"/><circle cx="7" cy="8" r="1.25"/><circle cx="3" cy="13" r="1.25"/><circle cx="7" cy="13" r="1.25"/></svg>',
-  star: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">'
-    + '<path d="M8 1.6l1.95 3.95 4.35.63-3.15 3.07.74 4.33L8 11.53l-3.89 2.05.74-4.33L1.7 6.18l4.35-.63z"/></svg>',
-  up: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg>',
-  down: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>',
+  grip: svg('<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>'),
+  star: svg('<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'),
+  up: svg('<path d="m18 15-6-6-6 6"/>'),
+  down: svg('<path d="m6 9 6 6 6-6"/>'),
+  desc: svg('<path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/>'),
+  asc: svg('<path d="m3 8 4-4 4 4"/><path d="M7 4v16"/><path d="M11 12h4"/><path d="M11 16h7"/><path d="M11 20h10"/>'),
+  lock: svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+  unlock: svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'),
+  sun: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>'),
+  moon: svg('<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'),
+  x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  trash: svg('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  tv: svg('<rect width="20" height="15" x="2" y="7" rx="2"/><path d="m17 2-5 5-5-5"/>'),
 };
 
 // Watch priority rules: [name, description]. The key order is the order unused rules are listed in.
@@ -279,7 +460,6 @@ const RULES = {
   POINTS_ASCENDING: ["Fewest channel points", "Channels where you have the fewest points first."],
   ORDER: ["List order", "Channels higher in the list first."],
 };
-const ruleName = (rule) => RULES[rule]?.[0] ?? rule;
 
 // Values the table can be sorted by; `null` sorts last in both directions.
 const SORT_VALUE = {
@@ -296,19 +476,113 @@ let savingOrder = false;
 let draft = null;         // [{ rule, on }] while the watch priority editor is open
 // Reordering is locked by default, so a stray drag can't change the order. Both settings are per browser.
 let orderLocked = true;
-let sortKey = "order";
+let sortKey = "order";    // "order" or "<field>-<asc|desc>"
 try {
   orderLocked = localStorage.getItem("orderLocked") !== "0";
   sortKey = localStorage.getItem("sort") ?? "order";
 } catch {}
-if (![...$("sort").options].some((o) => o.value === sortKey)) sortKey = "order";
+if (sortKey !== "order" && !(/^(\w+)-(asc|desc)$/.test(sortKey) && SORT_VALUE[sortKey.split("-")[0]])) sortKey = "order";
 
 const canReorder = () => !orderLocked && sortKey === "order";
 
-function showError(text) {
-  $("add-msg").className = "msg err";
-  $("add-msg").textContent = text;
+// === Toasts === //
+// Notices stack bottom right, errors bottom left. Hovering holds a toast.
+
+function toast(text, error = false) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  if (error) el.setAttribute("role", "alert");
+  el.innerHTML = `<span></span><button type="button" class="icon-btn x" aria-label="Dismiss">${ICON.x}</button><i class="drain"></i>`;
+  el.firstElementChild.textContent = text;
+  const box = $(error ? "errors" : "notices");
+  box.append(el);
+  while (box.childElementCount > 3) box.firstElementChild.remove();
+  const drain = el.querySelector(".drain");
+  const life = error ? 9000 : 3500;
+  const close = () => el.remove();
+  el.querySelector(".x").addEventListener("click", close);
+  if (reduceMotion.matches) {
+    drain.hidden = true;
+    let timer = setTimeout(close, life);
+    el.addEventListener("pointerenter", () => clearTimeout(timer));
+    el.addEventListener("pointerleave", () => { timer = setTimeout(close, life); });
+  } else {
+    drain.style.animationDuration = life + "ms";
+    drain.addEventListener("animationend", close);
+  }
 }
+const showError = (text) => toast(text, true);
+
+// === Tooltips === //
+// For every [data-tip]: its label, plus an optional one-line [data-hint].
+
+const tip = $("tip");
+let tipTimer = 0, tipAnchor = null, tipHiddenAt = 0;
+
+function showTip(el) {
+  tipAnchor = el;
+  tip.innerHTML = `<b>${esc(el.dataset.tip)}</b>` + (el.dataset.hint ? `<span>${esc(el.dataset.hint)}</span>` : "");
+  tip.hidden = false;
+  const a = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  const left = Math.min(Math.max(8, a.left + a.width / 2 - t.width / 2), innerWidth - t.width - 8);
+  const below = a.bottom + 6 + t.height < innerHeight - 8;
+  tip.style.left = left + "px";
+  tip.style.top = (below ? a.bottom + 6 : a.top - 6 - t.height) + "px";
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  if (!tip.hidden) tipHiddenAt = Date.now();
+  tip.hidden = true;
+  tipAnchor = null;
+}
+function queueTip(el) {
+  if (!el || el === tipAnchor) return;
+  hideTip();
+  // Once one has shown, the next within 400ms is instant.
+  tipTimer = setTimeout(() => showTip(el), Date.now() - tipHiddenAt < 400 ? 0 : 150);
+}
+document.addEventListener("pointerover", (ev) => {
+  if (ev.pointerType !== "mouse") return;
+  const el = ev.target.closest("[data-tip]");
+  if (el) queueTip(el); else if (tipAnchor || tipTimer) hideTip();
+});
+document.addEventListener("focusin", (ev) => {
+  const el = ev.target.closest?.("[data-tip]");
+  if (el && el.matches(":focus-visible")) queueTip(el); else hideTip();
+});
+document.addEventListener("pointerdown", hideTip);
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") hideTip(); });
+addEventListener("scroll", hideTip, true);
+addEventListener("resize", hideTip);
+
+// Sets an icon button's label, tooltip and icon in one go.
+function labelButton(btn, icon, label, hint) {
+  btn.innerHTML = icon;
+  btn.dataset.tip = label;
+  if (hint) btn.dataset.hint = hint; else delete btn.dataset.hint;
+  btn.setAttribute("aria-label", label);
+  if (btn === tipAnchor) showTip(btn);
+}
+
+// === Theme === //
+
+function applyThemeButton() {
+  const light = document.documentElement.dataset.theme === "light";
+  labelButton($("theme-btn"), light ? ICON.moon : ICON.sun, light ? "Switch to dark theme" : "Switch to light theme");
+  document.querySelector('meta[name="theme-color"]').content = light ? "#f3f3f4" : "#1e1f23";
+}
+$("theme-btn").addEventListener("click", () => {
+  const swap = () => {
+    const light = document.documentElement.dataset.theme !== "light";
+    if (light) document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
+    try { localStorage.setItem("cyexTheme", light ? "light" : "dark"); } catch {}
+    applyThemeButton();
+  };
+  if (document.startViewTransition && !reduceMotion.matches) document.startViewTransition(swap); else swap();
+});
+applyThemeButton();
+
+// === Requests === //
 
 function showAuth() {
   disconnect();
@@ -319,7 +593,7 @@ function showAuth() {
     $("access").hidden = true;
     $("new-token").hidden = true;
     $("auth").hidden = false;
-    $("user").textContent = "locked";
+    $("user").textContent = "Locked";
     $("pause-btn").hidden = true;
     $("auth-token").focus();
   }
@@ -373,31 +647,33 @@ function sortedRows(streamers) {
   });
 }
 
-function rowHtml({ s, pos }) {
-  const badges = (s.online ? '<span class="badge live">LIVE</span>' : "")
-    + (s.prioritized ? '<span class="badge prio">starred</span>' : "")
-    + (s.watching ? '<span class="badge watch">watching</span>' : "")
-    + (s.source === "followers" ? '<span class="badge follow">followed</span>' : "");
+function rowHtml({ s, pos }, i) {
+  const chips = (s.online ? '<span class="chip live">live</span>' : "")
+    + (s.watching ? '<span class="chip">watching</span>' : "")
+    + (s.source === "followers" ? '<span class="chip">followed</span>' : "");
   const sub = s.online
     ? [s.game, s.title].filter(Boolean).join(" · ") + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
     : "Offline";
   const history = Object.entries(s.history).filter(([, h]) => h.counter)
-    .map(([k, h]) => `${k} ×${h.counter} (${signed(h.amount)})`).join(", ");
+    .map(([k, h]) => `${k} ×${fmt(h.counter)} (${signed(h.amount)})`).join(", ");
   const star = s.prioritized ? "Unstar" : "Star";
-  return `<tr title="${esc(history)}" data-id="${esc(s.id)}">
-    <td class="grip"><button class="handle icon" title="Drag to reorder" aria-label="Move ${esc(s.username)} (arrow keys)">${ICON.grip}</button></td>
+  const cls = [i % 2 ? "alt" : "", s.watching ? "watching" : ""].join(" ");
+  return `<tr class="${cls}" title="${esc(history)}" data-id="${esc(s.id)}">
+    <td class="grip"><button class="icon-btn handle" type="button" data-tip="Drag to reorder" data-hint="Or focus and use the arrow keys"
+      aria-label="Move ${esc(s.username)}">${ICON.grip}</button></td>
     <td class="num pos">${pos}</td>
-    <td><div class="name-row">
-        <button class="star icon ${s.prioritized ? "on" : ""}" data-id="${esc(s.id)}" data-on="${s.prioritized ? 1 : 0}"
-          title="${s.prioritized ? "Unstar" : "Star: a watch slot through the Starred channels rule"}"
+    <td class="channel"><div class="name-row">
+        <button class="icon-btn star ${s.prioritized ? "on" : ""}" type="button" data-id="${esc(s.id)}" data-on="${s.prioritized ? 1 : 0}"
+          data-tip="${star}" data-hint="${s.prioritized ? "" : "Gets a watch slot through the Starred channels rule"}"
           aria-label="${star} ${esc(s.username)}" aria-pressed="${s.prioritized}">${ICON.star}</button>
-        <div><div class="name"><a href="https://www.twitch.tv/${esc(s.username)}" target="_blank" rel="noopener">${esc(s.username)}</a>${badges}</div>
+        <div><div class="name"><a href="https://www.twitch.tv/${esc(s.username)}" target="_blank" rel="noopener">${esc(s.username)}</a>${chips}</div>
         <div class="sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
     <td class="num">${fmt(s.points)}</td>
     <td class="num ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
-    <td class="num hide-sm">${s.online ? Math.floor(s.minutes_watched) + "m" : "–"}</td>
-    <td class="num hide-sm">${s.watch_streak ?? "–"}</td>
-    <td class="num"><button class="remove" data-id="${esc(s.id)}">Remove</button></td>
+    <td class="num hide-sm">${s.online ? fmt(Math.floor(s.minutes_watched)) + "m" : "–"}</td>
+    <td class="num hide-sm">${s.watch_streak == null ? "–" : fmt(s.watch_streak)}</td>
+    <td class="actions"><button class="icon-btn remove" type="button" data-id="${esc(s.id)}" data-tip="Remove"
+      aria-label="Remove ${esc(s.username)}">${ICON.trash}</button></td>
   </tr>`;
 }
 
@@ -406,13 +682,13 @@ function renderRows() {
   if (drag || savingOrder || !status) return;
   const streamers = status.streamers;
   if (!streamers.length) {
-    $("rows").innerHTML = '<tr><td colspan="8" class="empty">No channels yet. Add one above.</td></tr>';
+    $("rows").innerHTML = `<tr><td colspan="8"><div class="empty">${ICON.tv}No channels yet. Add one to start mining.</div></td></tr>`;
     return;
   }
   // Re-rendering replaces the buttons; keep keyboard focus on the same one.
   const focused = document.activeElement?.closest("#rows button");
   const focusedRow = focused?.closest("tr")?.dataset.id;
-  const focusedKind = focused?.classList[0];
+  const focusedKind = ["handle", "star", "remove"].find((k) => focused?.classList.contains(k));
   $("rows").innerHTML = sortedRows(streamers).map(rowHtml).join("");
   if (focusedRow && focusedKind) {
     $("rows").querySelector(`tr[data-id="${CSS.escape(focusedRow)}"] button.${focusedKind}`)?.focus();
@@ -427,25 +703,53 @@ function renderListHint() {
   if (crowded) {
     hint.textContent = `${liveStarred} starred channels are live, but Twitch only counts 2 at a time. The ones higher in the list win.`;
   } else if (sortKey !== "order") {
-    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; switch back to "
-      + "List order to reorder.";
+    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; sort by list order to reorder.";
   } else {
     hint.textContent = orderLocked
       ? "Unlock the order to drag channels into place. Higher channels win ties in every watch priority rule."
-      : "Drag the handle (or focus it and use the arrow keys) to reorder.";
+      : "Drag the handle, or focus it and use the arrow keys, to reorder.";
   }
 }
 
-function applyReorderState() {
-  const btn = $("lock-btn");
+function applySortState() {
+  const [field, dir] = sortKey.split("-");
+  for (const b of $("sort").children) {
+    const on = b.dataset.sort === field;
+    b.setAttribute("aria-checked", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  const dirBtn = $("dir-btn");
+  dirBtn.hidden = sortKey === "order";
+  if (dir) labelButton(dirBtn, dir === "asc" ? ICON.asc : ICON.desc, dir === "asc" ? "Lowest first" : "Highest first", "Click to flip");
+
+  const lock = $("lock-btn");
   $("channels").classList.toggle("no-reorder", !canReorder());
-  btn.textContent = orderLocked ? "Order locked" : "Order unlocked";
-  btn.title = orderLocked ? "Unlock to reorder channels by dragging" : "Lock the order so it can't be changed by accident";
-  btn.setAttribute("aria-pressed", String(orderLocked));
+  lock.hidden = sortKey !== "order";
+  lock.setAttribute("aria-pressed", String(orderLocked));
+  labelButton(lock, orderLocked ? ICON.lock : ICON.unlock, orderLocked ? "Order locked" : "Order unlocked",
+    orderLocked ? "Click to reorder channels by dragging" : "Click to lock the order so it can't change by accident");
   renderListHint();
 }
 
+function setSort(key) {
+  sortKey = key;
+  try { localStorage.setItem("sort", sortKey); } catch {}
+  applySortState();
+  renderRows();
+}
+
 // === Status === //
+
+function renderUptime() {
+  if (!status?.started_at) return;
+  const mins = Math.max(0, Math.floor((Date.now() / 1000 - status.started_at) / 60));
+  const d = Math.floor(mins / 1440), h = Math.floor(mins / 60) % 24, m = mins % 60;
+  const el = $("s-uptime");
+  el.textContent = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  el.title = "Running since " + fmtDate(new Date(status.started_at * 1000));
+}
+// Minutes are enough; tick on the minute.
+setInterval(renderUptime, 60_000);
 
 function render(st) {
   authed = true;
@@ -455,28 +759,30 @@ function render(st) {
   if (!st.ready) {
     $("dashboard").hidden = true;
     $("login").hidden = false;
-    $("user").textContent = "not logged in";
+    $("user").textContent = "Not linked";
     $("pause-btn").hidden = true;
     const p = st.login_prompt;
-    $("login").innerHTML = p
-      ? `<div>Open <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a> and enter this code:</div>
+    $("login-body").innerHTML = p
+      ? `<p style="margin:0">Open <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url)}</a> and enter this code:</p>
          <div class="code">${esc(p.code)}</div>
-         <div class="muted">Expires at ${new Date(p.expires_at * 1000).toLocaleTimeString()}</div>`
-      : '<div class="muted">Logging in…</div>';
+         <p class="hint">Expires at ${fmtTime(new Date(p.expires_at * 1000)).slice(0, 5)}</p>`
+      : '<p class="hint">Logging in…</p>';
     return;
   }
   $("login").hidden = true;
   $("dashboard").hidden = false;
-  $("user").innerHTML = st.paused
-    ? `<span class="badge paused">paused</span> ${esc(st.user)}`
-    : "Mining as " + esc(st.user);
+  $("user").innerHTML = (st.paused ? '<span class="chip paused">paused</span> ' : "") + '<span class="hide-sm">Mining as </span><b>' + esc(st.user) + "</b>";
   $("pause-btn").hidden = false;
   if (!$("pause-btn").disabled) renderPaused(st.paused);
-  $("s-channels").textContent = st.streamers.length;
-  $("s-live").textContent = st.streamers.filter((s) => s.online).length;
+  $("s-channels").textContent = fmt(st.streamers.length);
+  $("s-live").textContent = fmt(st.streamers.filter((s) => s.online).length);
+  $("s-watching").textContent = fmt(st.streamers.filter((s) => s.watching).length);
   $("s-points").textContent = fmt(st.streamers.reduce((a, s) => a + s.points, 0));
-  $("s-gained").textContent = signed(st.streamers.reduce((a, s) => a + s.gained, 0));
-  $("prio-summary").textContent = "Watching by: " + st.priority.map(ruleName).join(", then ") + ".";
+  const gained = st.streamers.reduce((a, s) => a + s.gained, 0);
+  $("s-gained").textContent = signed(gained);
+  $("s-gained").classList.toggle("gain", gained > 0);
+  renderUptime();
+  if (!draft) renderRules();
   renderRows();
   renderListHint();
 }
@@ -489,21 +795,25 @@ async function refresh() {
     if (res.status === 401) return showAuth();
     render(await res.json());
   } catch (e) {
-    $("user").textContent = "connection lost, retrying…";
+    $("user").textContent = "Connection lost, retrying…";
   }
 }
 
 // === Activity log === //
 
+let logCount = 0;  // striping is assigned on insert, so rows keep their shade as old ones drop off
+
 function logLine(e) {
   const div = document.createElement("div");
-  div.innerHTML = `<time>${new Date(e.ts * 1000).toLocaleTimeString()}</time>${esc(e.text)}`;
+  div.className = "log-row" + (logCount++ % 2 ? " alt" : "");
+  div.innerHTML = `<time>${fmtTime(new Date(e.ts * 1000))}</time><span>${esc(e.text)}</span>`;
   return div;
 }
 
 // The server sends the recent lines on connect (`log-init`), then each new one (`log`).
 function setLog(events) {
   const box = $("events");
+  logCount = 0;
   box.replaceChildren(...events.map(logLine));
   box.scrollTop = box.scrollHeight;
 }
@@ -529,7 +839,7 @@ function connect() {
   source.addEventListener("log-init", (ev) => setLog(JSON.parse(ev.data)));
   source.addEventListener("log", (ev) => appendLog(JSON.parse(ev.data)));
   source.onerror = () => {
-    if (authed) $("user").textContent = "connection lost, retrying…";
+    if (authed) $("user").textContent = "Connection lost, retrying…";
     // The browser retries network errors by itself, but gives up on HTTP errors such as 401:
     // check why, then try again (unless we've been logged out).
     if (source.readyState === EventSource.CLOSED) {
@@ -561,18 +871,19 @@ $("add").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const username = normalize($("username").value);
   if (!username) return;
-  const btn = $("add-btn"), msg = $("add-msg");
+  const btn = $("add-btn");
   btn.disabled = true;
-  msg.className = "msg"; msg.textContent = `Adding ${username}…`;
+  btn.textContent = "Adding…";
   try {
     const body = await (await send("POST", "api/streamers", { username })).json();
-    msg.className = "msg ok"; msg.textContent = `Added ${body.username}${body.online ? " (live now)" : ""}.`;
+    toast(`Added ${body.username}${body.online ? ", live now" : ""}`);
     $("username").value = "";
     refresh();
   } catch (e) {
-    msg.className = "msg err"; msg.textContent = e.message;
+    showError(e.message);
   } finally {
     btn.disabled = false;
+    btn.textContent = "Add";
   }
 });
 
@@ -587,9 +898,13 @@ $("rows").addEventListener("click", async (ev) => {
   }
   const btn = ev.target.closest("button.remove");
   if (!btn) return;
+  // Arms first; a second click within 3s removes.
   if (btn.dataset.confirm !== "1") {
-    btn.dataset.confirm = "1"; btn.textContent = "Confirm?";
-    setTimeout(() => { btn.dataset.confirm = ""; btn.textContent = "Remove"; }, 3000);
+    btn.dataset.confirm = "1";
+    btn.classList.add("armed");
+    btn.dataset.tip = "Click again to remove";
+    showTip(btn);
+    setTimeout(() => { btn.dataset.confirm = ""; btn.classList.remove("armed"); btn.dataset.tip = "Remove"; }, 3000);
     return;
   }
   btn.disabled = true;
@@ -597,20 +912,33 @@ $("rows").addEventListener("click", async (ev) => {
   refresh();
 });
 
-$("sort").value = sortKey;
-$("sort").addEventListener("change", () => {
-  sortKey = $("sort").value;
-  try { localStorage.setItem("sort", sortKey); } catch {}
-  applyReorderState();
-  renderRows();
+$("sort").addEventListener("click", (ev) => {
+  const field = ev.target.closest("button")?.dataset.sort;
+  if (!field || field === sortKey.split("-")[0]) return;
+  setSort(field === "order" ? "order" : field + "-desc");
+});
+// Arrow keys move and pick, like a radio group.
+$("sort").addEventListener("keydown", (ev) => {
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[ev.key];
+  if (!step) return;
+  ev.preventDefault();
+  const opts = [...$("sort").children];
+  const i = opts.findIndex((b) => b.getAttribute("aria-checked") === "true");
+  const next = opts[(i + step + opts.length) % opts.length];
+  next.click();
+  next.focus();
+});
+$("dir-btn").addEventListener("click", () => {
+  const [field, dir] = sortKey.split("-");
+  setSort(`${field}-${dir === "asc" ? "desc" : "asc"}`);
 });
 
 $("lock-btn").addEventListener("click", () => {
   orderLocked = !orderLocked;
   try { localStorage.setItem("orderLocked", orderLocked ? "1" : "0"); } catch {}
-  applyReorderState();
+  applySortState();
 });
-applyReorderState();
+applySortState();
 
 // === Drag to reorder === //
 // Pointer events (not HTML5 drag & drop) so it works with mouse, pen and touch alike. The dragged
@@ -646,6 +974,7 @@ function moveRow(row, before) {
 function startDrag(ev, handle) {
   const row = handle.closest("tr");
   ev.preventDefault();
+  hideTip();
   handle.setPointerCapture(ev.pointerId);
   drag = {
     row, pointerId: ev.pointerId, y: ev.clientY,
@@ -742,9 +1071,18 @@ rowsEl.addEventListener("keydown", (ev) => {
   saveOrder();
 });
 
-// === Watch priority editor === //
+// === Watch priority === //
+// Shows the active rules; Edit turns the list into an editor with every rule.
 
 function renderRules() {
+  if (!draft) {
+    $("rules").innerHTML = (status?.priority ?? []).map((rule, i) => {
+      const [name, desc] = RULES[rule] ?? [rule, ""];
+      return `<li class="rule"><span class="rule-n">${i + 1}</span>
+        <span class="rule-body"><span><span class="rule-name">${esc(name)}</span><span class="rule-desc">${esc(desc)}</span></span></span></li>`;
+    }).join("");
+    return;
+  }
   let rank = 0;
   $("rules").innerHTML = draft.map(({ rule, on }, i) => {
     const [name, desc] = RULES[rule] ?? [rule, ""];
@@ -753,8 +1091,8 @@ function renderRules() {
       <label class="rule-body"><input type="checkbox" ${on ? "checked" : ""}>
         <span><span class="rule-name">${esc(name)}</span><span class="rule-desc">${esc(desc)}</span></span></label>
       <span class="rule-move">
-        <button type="button" class="icon up" aria-label="Move ${esc(name)} up" ${i === 0 ? "disabled" : ""}>${ICON.up}</button>
-        <button type="button" class="icon down" aria-label="Move ${esc(name)} down" ${i === draft.length - 1 ? "disabled" : ""}>${ICON.down}</button>
+        <button type="button" class="icon-btn up" data-tip="Move up" aria-label="Move ${esc(name)} up" ${i === 0 ? "disabled" : ""}>${ICON.up}</button>
+        <button type="button" class="icon-btn down" data-tip="Move down" aria-label="Move ${esc(name)} down" ${i === draft.length - 1 ? "disabled" : ""}>${ICON.down}</button>
       </span>
     </li>`;
   }).join("");
@@ -767,19 +1105,22 @@ function openEditor() {
     ...Object.keys(RULES).filter((rule) => !active.includes(rule)).map((rule) => ({ rule, on: false })),
   ];
   renderRules();
-  $("prio-msg").textContent = "";
-  $("prio-editor").hidden = false;
+  $("prio-foot").hidden = false;
+  $("prio-btn").hidden = true;
   $("prio-btn").setAttribute("aria-expanded", "true");
+  $("rules").querySelector("input")?.focus();
 }
 
 function closeEditor() {
   draft = null;
-  $("prio-editor").hidden = true;
+  renderRules();
+  $("prio-foot").hidden = true;
+  $("prio-btn").hidden = false;
   $("prio-btn").setAttribute("aria-expanded", "false");
 }
 
-$("prio-btn").addEventListener("click", () => (draft ? closeEditor() : openEditor()));
-$("prio-cancel").addEventListener("click", closeEditor);
+$("prio-btn").addEventListener("click", openEditor);
+$("prio-cancel").addEventListener("click", () => { closeEditor(); $("prio-btn").focus(); });
 
 $("rules").addEventListener("change", (ev) => {
   const i = Number(ev.target.closest("li").dataset.i);
@@ -803,19 +1144,18 @@ $("rules").addEventListener("click", (ev) => {
 
 $("prio-save").addEventListener("click", async () => {
   const rules = draft.filter((d) => d.on).map((d) => d.rule);
-  const msg = $("prio-msg");
-  if (!rules.length) {
-    msg.className = "msg err"; msg.textContent = "Tick at least one rule.";
-    return;
-  }
+  if (!rules.length) return showError("Tick at least one rule");
   const btn = $("prio-save");
   btn.disabled = true;
   try {
     await send("PUT", "api/settings/priority", { rules });
+    status.priority = rules;
     closeEditor();
+    $("prio-btn").focus();
+    toast("Watch priority saved");
     refresh();
   } catch (e) {
-    msg.className = "msg err"; msg.textContent = e.message;
+    showError(e.message);
   } finally {
     btn.disabled = false;
   }
@@ -827,6 +1167,7 @@ function renderPaused(paused) {
   const btn = $("pause-btn");
   btn.dataset.paused = String(paused);
   btn.textContent = paused ? "Resume" : "Pause";
+  btn.dataset.tip = paused ? "Resume mining" : "Pause mining";
 }
 $("pause-btn").addEventListener("click", async () => {
   const btn = $("pause-btn");
@@ -864,22 +1205,24 @@ $("auth-form").addEventListener("submit", async (ev) => {
 });
 
 $("regen-btn").addEventListener("click", async () => {
-  const btn = $("regen-btn"), msg = $("access-msg");
+  const btn = $("regen-btn");
+  const reset = () => { btn.dataset.confirm = ""; btn.classList.remove("armed"); btn.textContent = "Regenerate login token"; };
   if (btn.dataset.confirm !== "1") {
-    btn.dataset.confirm = "1"; btn.textContent = "Really regenerate? Click again";
-    setTimeout(() => { btn.dataset.confirm = ""; btn.textContent = "Regenerate login token"; }, 4000);
+    btn.dataset.confirm = "1";
+    btn.classList.add("armed");
+    btn.textContent = "Click again to regenerate";
+    setTimeout(reset, 4000);
     return;
   }
-  btn.dataset.confirm = ""; btn.textContent = "Regenerate login token";
+  reset();
   btn.disabled = true;
   try {
     const body = await (await send("POST", "api/auth/regenerate")).json();
     $("new-token-value").textContent = body.token;
     $("new-token").hidden = false;
-    msg.className = "msg ok";
-    msg.textContent = "New token created. This browser stays logged in; save the token to log in elsewhere.";
+    toast("New token created. This browser stays logged in; save the token to log in elsewhere");
   } catch (e) {
-    msg.className = "msg err"; msg.textContent = e.message;
+    showError(e.message);
   } finally {
     btn.disabled = false;
   }
