@@ -108,6 +108,12 @@ pub async fn login(
         device_id,
     };
     fs::write(&path, serde_json::to_string_pretty(&creds)?)?;
+    // The Twitch token gives full account access: owner-only, like the web UI token.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     info!("Login successful, token saved to {}", path.display());
     Ok(creds)
 }
