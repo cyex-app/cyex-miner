@@ -271,6 +271,8 @@ async fn status(State(state): State<Arc<AppState>>) -> Json<Status> {
 /// State of one `/api/stream` connection.
 struct StreamConn {
     state: Arc<AppState>,
+    /// The token the stream was opened with; the stream ends once it's no longer valid (regenerated).
+    token: String,
     /// The last status sent, to only send changes.
     last_status: String,
     events: Option<broadcast::Receiver<LogEvent>>,
@@ -289,10 +291,11 @@ async fn next_event(rx: &mut Option<broadcast::Receiver<LogEvent>>) -> Result<Lo
 /// - `status`: the dashboard state (like `/api/status` without events), sent on connect and when it changes
 /// - `log-init`: the recent log lines, sent once the miner is running (and again if the client fell behind)
 /// - `log`: one new log line
-async fn stream(State(state): State<Arc<AppState>>) -> Response {
+async fn stream(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let conn = StreamConn { state, last_status: String::new(), events: None, tick, queued: VecDeque::new() };
+    let token = request_token(&headers).unwrap_or_default();
+    let conn = StreamConn { state, token, last_status: String::new(), events: None, tick, queued: VecDeque::new() };
 
     let events = futures_util::stream::unfold(conn, |mut c| async move {
         loop {
@@ -310,6 +313,9 @@ async fn stream(State(state): State<Arc<AppState>>) -> Response {
             }
             tokio::select! {
                 _ = c.tick.tick() => {
+                    if !c.state.auth.check(&c.token) {
+                        return None;
+                    }
                     let status = serde_json::to_string(&snapshot(&c.state, false)).unwrap_or_default();
                     if status != c.last_status {
                         c.last_status = status.clone();
