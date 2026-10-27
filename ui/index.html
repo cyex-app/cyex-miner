@@ -135,6 +135,9 @@
   input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
   input[type=checkbox]:checked::after { opacity: 1; }
   input[type=checkbox]:disabled { opacity: .4; cursor: default; }
+  /* Some but not all picked: a dash instead of the tick. */
+  input[type=checkbox]:indeterminate { background: var(--accent); border-color: var(--accent); }
+  input[type=checkbox]:indeterminate::after { width: 8px; height: 0; margin: 0; border-width: 0 0 2px; transform: none; opacity: 1; }
 
   /* Chips */
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
@@ -219,6 +222,9 @@
   .rule input:disabled + span { cursor: default; }
 
   /* Badge drops */
+  .select-all { display: flex; align-items: center; gap: 8px; padding-right: 4px; color: var(--muted);
+    font-size: .8rem; font-weight: 600; cursor: pointer; }
+  .select-all:has(input:disabled) { cursor: default; }
   .badges { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
   .badge-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
   .badge-row:last-child { border-bottom: 0; }
@@ -414,7 +420,10 @@
         </section>
 
         <section class="card">
-          <header><h2>Badge drops<span class="dim" id="badge-count"></span></h2></header>
+          <header><h2>Badge drops<span class="dim" id="badge-count"></span></h2>
+            <label class="select-all" data-tip="Pick every badge" data-hint="Badges already earned are left out">
+              <input type="checkbox" id="badges-all"><span>All</span></label>
+          </header>
           <ul class="badges" id="badges"></ul>
         </section>
 
@@ -1386,6 +1395,15 @@ function renderBadges() {
   // The server refreshes campaigns every 30 minutes; don't show one that has ended meanwhile.
   const list = (status?.badges ?? []).filter((b) => b.ends_at > Date.now() / 1000)
     .sort((a, b) => a.earned - b.earned || a.ends_at - b.ends_at);
+  // All: ticked when every badge that can still be earned is picked, a dash when only some are.
+  const pickable = list.filter((b) => !b.earned);
+  const picked = pickable.filter((b) => b.picked).length;
+  const all = $("badges-all");
+  if (!pickingAll) {
+    all.checked = pickable.length > 0 && picked === pickable.length;
+    all.indeterminate = picked > 0 && picked < pickable.length;
+  }
+  all.disabled = !pickable.length || pickingAll;
   const key = JSON.stringify(list);
   if (key === badgesShown) return;
   badgesShown = key;
@@ -1399,6 +1417,26 @@ function renderBadges() {
   $("badges").innerHTML = list.map(badgeHtml).join("");
   if (focused) $("badges").querySelector(`li[data-id="${CSS.escape(focused.dataset.id)}"] ${focusedKind}`)?.focus();
 }
+
+// All picks (or unpicks) every badge not earned yet, one request per badge that changes.
+let pickingAll = false;
+$("badges-all").addEventListener("change", async (ev) => {
+  const picked = ev.target.checked;
+  const ids = (status?.badges ?? []).filter((b) => !b.earned && b.picked !== picked && b.ends_at > Date.now() / 1000)
+    .map((b) => b.campaign_id);
+  pickingAll = true;
+  ev.target.disabled = true;
+  try {
+    for (const id of ids) await send("PUT", "api/badges/" + encodeURIComponent(id), { picked });
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    pickingAll = false;
+    badgesShown = "";  // the tick box state comes from the next status
+    await refresh();
+    ev.target.focus();
+  }
+});
 
 // A badge image that fails to load is replaced by the plain icon.
 $("badges").addEventListener("error", (ev) => {
