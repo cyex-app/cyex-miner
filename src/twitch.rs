@@ -100,6 +100,24 @@ fn parse_campaign_ids(resp: &Value) -> Vec<String> {
 }
 
 /// The current watch streak from a `RewardList` response. Twitch sends the count as a string.
+/// Live channels from a game directory page, as (id, login, viewers).
+pub(crate) fn parse_directory(resp: &Value) -> Vec<(String, String, i64)> {
+    resp["data"]["game"]["streams"]["edges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let node = &e["node"];
+            let b = &node["broadcaster"];
+            Some((
+                b["id"].as_str()?.to_string(),
+                b["login"].as_str()?.to_string(),
+                node["viewersCount"].as_i64().unwrap_or(0),
+            ))
+        })
+        .collect()
+}
+
 pub fn parse_watch_streak(resp: &Value) -> Option<u32> {
     let value = &resp["data"]["channel"]["self"]["watchStreakMilestone"]["watchStreakMilestone"]["value"];
     match value {
@@ -371,6 +389,33 @@ impl Twitch {
             .into_iter()
             .map(|r| r.map(|resp| parse_campaign_ids(&resp)).unwrap_or_default())
             .collect()
+    }
+
+    /// The most watched live channels in a game (by its directory slug), as (id, login, viewers).
+    pub async fn live_in_game(&self, slug: &str) -> Result<Vec<(String, String, i64)>> {
+        let resp = self
+            .gql(&DIRECTORY_PAGE_GAME.with(json!({
+                "limit": 30,
+                "slug": slug,
+                "imageWidth": 50,
+                "includeCostreaming": false,
+                "options": {
+                    "broadcasterLanguages": [],
+                    "freeformTags": null,
+                    "includeRestricted": ["SUB_ONLY_LIVE"],
+                    "recommendationsContext": { "platform": "web" },
+                    "sort": "VIEWER_COUNT",
+                    "systemFilters": [],
+                    "tags": [],
+                    "requestID": "JIRA-VXP-2397",
+                },
+                "sortTypeIsRecency": false,
+            })))
+            .await?;
+        if resp["data"]["game"].is_null() {
+            bail!("no game directory for {slug}: {resp}");
+        }
+        Ok(parse_directory(&resp))
     }
 
     /// The current watch streak on each channel; `None` where Twitch reported none or the lookup failed.

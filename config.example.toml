@@ -15,8 +15,9 @@ claim_drops_startup = false
 
 # How to pick the (max 2) channels watched at the same time: rules in order of importance, tried
 # until both slots are taken. Ties go to the channel higher in the list.
+#   BADGES             live channels eligible for a badge drop you picked in the web UI
 #   PRIORITIZED        starred channels
-#   STREAK             streams whose watch streak isn't earned yet
+#   STREAK            streams whose watch streak isn't earned yet
 #   LONGEST_STREAK     channels with the longest current watch streak
 #   DROPS              streams with unclaimed drops for their game
 #   SUBSCRIBED         channels with a points multiplier, highest first
@@ -24,7 +25,7 @@ claim_drops_startup = false
 #   POINTS_DESCENDING  most channel points first
 #   ORDER              the list order
 # Only read until the watch priority is first saved in the web UI, which then takes over.
-priority = ["PRIORITIZED", "STREAK", "DROPS", "ORDER"]
+priority = ["BADGES", "PRIORITIZED", "STREAK", "DROPS", "ORDER"]
 
 # Also mine every channel you follow. New follows are added to the end of the list on each start.
 # Channels removed in the web UI are blacklisted so they don't come back; `blacklist` here is only

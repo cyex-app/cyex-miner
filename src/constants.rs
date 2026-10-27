@@ -72,6 +72,11 @@ pub const AVAILABLE_DROPS: Op = Op(
     "DropsHighlightService_AvailableDrops",
     "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
 );
+/// Live channels in a game's directory.
+pub const DIRECTORY_PAGE_GAME: Op = Op(
+    "DirectoryPage_Game",
+    "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd",
+);
 pub const GET_ID_FROM_LOGIN: Op = Op(
     "GetIDFromLogin",
     "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca",

@@ -14,6 +14,8 @@ pub const MAX_WATCHING: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Priority {
+    /// Live channels eligible for a badge drop picked in the web UI.
+    Badges,
     /// Starred channels.
     Prioritized,
     /// Streams whose watch streak isn't earned yet.
@@ -45,13 +47,14 @@ impl Priority {
             }),
             Self::PointsAscending => ranked.sort_by_key(|s| s.state().channel_points),
             Self::PointsDescending => ranked.sort_by_key(|s| Reverse(s.state().channel_points)),
-            Self::Prioritized | Self::Streak | Self::Drops | Self::Order => {}
+            Self::Badges | Self::Prioritized | Self::Streak | Self::Drops | Self::Order => {}
         }
         ranked
     }
 
     fn applies(self, s: &Streamer) -> bool {
         match self {
+            Self::Badges => s.state().badge_drop,
             Self::Prioritized => s.state().prioritized,
             Self::Streak => s.streak_missing(),
             Self::LongestStreak => s.state().watch_streak.is_some_and(|n| n > 0),

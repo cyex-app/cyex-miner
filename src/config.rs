@@ -109,7 +109,7 @@ impl Default for Config {
         Self {
             username: String::new(),
             claim_drops_startup: false,
-            priority: vec![Priority::Prioritized, Priority::Streak, Priority::Drops, Priority::Order],
+            priority: vec![Priority::Badges, Priority::Prioritized, Priority::Streak, Priority::Drops, Priority::Order],
             followers: false,
             followers_order: FollowersOrder::Asc,
             blacklist: Vec::new(),

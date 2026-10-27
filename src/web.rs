@@ -29,7 +29,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::{
     auth::LoginPrompt,
     entities::streamer::{HistoryEntry, Source, Streamer},
-    miner::{LogEvent, Miner},
+    miner::{BadgeView, LogEvent, Miner},
     priority::Priority,
     utils::random_alnum,
 };
@@ -108,6 +108,8 @@ pub async fn serve(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
         .route("/api/streamers/:id/prioritize", put(set_prioritize))
         .route("/api/settings/priority", put(set_priority))
         .route("/api/settings/paused", put(set_paused))
+        .route("/api/badges/:id", put(set_badge_picked))
+        .route("/api/badges/:id/channels", post(quick_add_badge))
         .route("/api/auth/regenerate", post(regenerate_token))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let app = Router::new()
@@ -233,6 +235,8 @@ struct Status {
     priority: Vec<Priority>,
     paused: bool,
     streamers: Vec<StreamerView>,
+    /// Running badge drops that need only watch time.
+    badges: Vec<BadgeView>,
     /// Only in `/api/status`; the live stream sends events separately.
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<Vec<LogEvent>>,
@@ -249,6 +253,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             priority: miner.priority(),
             paused: miner.paused(),
             streamers: miner.streamers().iter().map(|s| StreamerView::new(s)).collect(),
+            badges: miner.badges(),
             events: with_events.then(|| miner.events()),
         },
         None => Status {
@@ -259,6 +264,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             priority: Vec::new(),
             paused: false,
             streamers: Vec::new(),
+            badges: Vec::new(),
             events: with_events.then(Vec::new),
         },
     }
@@ -429,5 +435,24 @@ async fn reorder(Ready(miner): Ready, Json(body): Json<Reorder>) -> Response {
     match miner.reorder(&body.ids) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetBadgePicked {
+    picked: bool,
+}
+
+async fn set_badge_picked(Ready(miner): Ready, Path(id): Path<String>, Json(body): Json<SetBadgePicked>) -> Response {
+    match miner.set_badge_picked(&id, body.picked) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
+    }
+}
+
+async fn quick_add_badge(Ready(miner): Ready, Path(id): Path<String>) -> Response {
+    match miner.quick_add_badge(&id).await {
+        Ok(added) => Json(json!({ "added": added })).into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
 }

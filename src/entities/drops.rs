@@ -7,11 +7,23 @@ fn parse_dt(v: &Value) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(v.as_str()?).ok().map(|d| d.with_timezone(&Utc))
 }
 
+/// A Twitch chat badge given by a drop.
+#[derive(Debug, Clone)]
+pub struct BadgeReward {
+    /// The benefit id, which the inventory lists under `gameEventDrops` once earned.
+    pub benefit_id: String,
+    pub name: String,
+    pub image: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Drop {
     pub id: String,
     pub name: String,
     pub benefit: String,
+    pub badge: Option<BadgeReward>,
+    /// Subscriptions needed instead of (or on top of) watching.
+    pub required_subs: i64,
     pub minutes_required: i64,
     pub has_preconditions_met: Option<bool>,
     pub current_minutes_watched: i64,
@@ -37,10 +49,20 @@ impl Drop {
             .unwrap_or_default();
         benefits.sort();
         benefits.dedup();
+        let badge = v["benefitEdges"].as_array().into_iter().flatten().find_map(|e| {
+            let b = &e["benefit"];
+            (b["distributionType"].as_str() == Some("BADGE")).then(|| BadgeReward {
+                benefit_id: b["id"].as_str().unwrap_or_default().to_string(),
+                name: b["name"].as_str().unwrap_or_default().to_string(),
+                image: b["imageAssetURL"].as_str().unwrap_or_default().to_string(),
+            })
+        });
         Some(Self {
             id: v["id"].as_str()?.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
             benefit: benefits.join(", "),
+            badge,
+            required_subs: v["requiredSubs"].as_i64().unwrap_or(0),
             minutes_required: v["requiredMinutesWatched"].as_i64().unwrap_or(0),
             has_preconditions_met: None,
             current_minutes_watched: 0,
@@ -111,7 +133,10 @@ pub struct Campaign {
     pub id: String,
     pub game_id: String,
     pub game_name: String,
+    pub game_slug: String,
     pub name: String,
+    /// Channels the campaign is limited to, as (id, login); empty means any channel in the game.
+    pub allowed_channels: Vec<(String, String)>,
     pub in_inventory: bool,
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
@@ -124,7 +149,18 @@ impl Campaign {
             id: v["id"].as_str()?.to_string(),
             game_id: v["game"]["id"].as_str().unwrap_or_default().to_string(),
             game_name: v["game"]["displayName"].as_str().unwrap_or_default().to_string(),
+            game_slug: v["game"]["slug"].as_str().unwrap_or_default().to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
+            allowed_channels: if v["allow"]["isEnabled"].as_bool() == Some(false) {
+                Vec::new()
+            } else {
+                v["allow"]["channels"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c["id"].as_str()?.to_string(), c["name"].as_str()?.to_lowercase())))
+                    .collect()
+            },
             in_inventory: false,
             start_at: parse_dt(&v["startAt"])?,
             end_at: parse_dt(&v["endAt"])?,
@@ -138,6 +174,13 @@ impl Campaign {
     pub fn dt_match(&self) -> bool {
         let now = Utc::now();
         self.start_at < now && now < self.end_at
+    }
+
+    /// The drop that gives a badge for watching alone, if any.
+    pub fn watch_badge_drop(&self) -> Option<&Drop> {
+        self.drops
+            .iter()
+            .find(|d| d.badge.is_some() && d.minutes_required > 0 && d.required_subs == 0)
     }
 
     /// Removes drops that are already claimed or outside their time window.

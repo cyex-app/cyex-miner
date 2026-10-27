@@ -45,6 +45,11 @@ the web UI:
 - **Star** a channel to give it a watch slot through the `PRIORITIZED` rule.
 - **Remove** a channel. It's also blacklisted so it doesn't come back from your follow list; adding it again
   un-blacklists it.
+- **Badge drops** lists the running drop campaigns that give a chat badge for watch time alone (badges that
+  need a subscription or purchase aren't shown). Tick a badge to give its eligible live channels a watch slot
+  through the `BADGES` rule (it's turned on if it was off). **Add channels** adds up to 5 eligible channels
+  that are live, most viewers first; they're removed again once the badge is earned, the campaign ends or you
+  untick it. Channels you added yourself are never removed this way.
 
 With `followers = true`, new follows are added to the end of the list on each start and unfollowed channels
 are dropped. Per-channel overrides imported from the config (`follow_raid`, `chat`, ...) are kept in the
@@ -78,8 +83,8 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
 
 ## Features
 
-- Watches up to 2 channels at a time (Twitch's limit), picked by an ordered list of rules: `PRIORITIZED`
-  (starred channels), `STREAK`, `LONGEST_STREAK`, `DROPS`, `SUBSCRIBED`, `POINTS_ASCENDING`,
+- Watches up to 2 channels at a time (Twitch's limit), picked by an ordered list of rules: `BADGES`
+  (channels eligible for a picked badge drop), `PRIORITIZED` (starred channels), `STREAK`, `LONGEST_STREAK`, `DROPS`, `SUBSCRIBED`, `POINTS_ASCENDING`,
   `POINTS_DESCENDING`, `ORDER`. Set them in the web UI under **Watch priority** (saved in the database, overrides
   `priority` in the config from then on). For example `STREAK`, `ORDER` keeps every watch streak and otherwise
   watches the top 2 live channels of the list

@@ -129,6 +129,7 @@
     border-width: 0 0 2px 2px; transform: rotate(-45deg); opacity: 0; }
   input[type=checkbox]:checked { background: var(--accent); border-color: var(--accent); }
   input[type=checkbox]:checked::after { opacity: 1; }
+  input[type=checkbox]:disabled { opacity: .4; cursor: default; }
 
   /* Chips */
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
@@ -209,6 +210,23 @@
   .rule.off .rule-name { color: var(--muted); font-weight: 500; }
   .rule-move { display: flex; flex-shrink: 0; margin-top: -4px; }
   .editor-foot { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+  /* Badge drops */
+  .badges { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+  .badge-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
+  .badge-row:last-child { border-bottom: 0; }
+  .badge-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+  .badge-row.earned .badge-pick { cursor: default; }
+  .badge-pick img, .badge-pick svg.i { width: 28px; height: 28px; flex-shrink: 0; border-radius: var(--radius-sm); }
+  .badge-pick svg.i { padding: 4px; color: var(--dim); }
+  .badge-text { flex: 1; min-width: 0; }
+  .badge-text .rule-name, .badge-text .rule-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .progress .track { flex: 1; height: 4px; background: var(--neutral-chip); border-radius: var(--radius-sm); overflow: hidden; }
+  .progress .fill { display: block; height: 100%; background: var(--accent); }
+  .progress .mono { color: var(--dim); font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  .chip.earned { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .badges .empty { padding: 24px 16px; }
 
   /* Activity log */
   #events { height: 360px; overflow-y: auto; overscroll-behavior: contain; font-size: .8rem; }
@@ -381,6 +399,11 @@
           </div>
         </section>
 
+        <section class="card">
+          <header><h2>Badge drops<span class="dim" id="badge-count"></span></h2></header>
+          <ul class="badges" id="badges"></ul>
+        </section>
+
         <section class="card" id="priority">
           <header>
             <h2>Watch priority</h2>
@@ -456,10 +479,12 @@ const ICON = {
   x: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
   trash: svg('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   tv: svg('<rect width="20" height="15" x="2" y="7" rx="2"/><path d="m17 2-5 5-5-5"/>'),
+  award: svg('<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>'),
 };
 
 // Watch priority rules: [name, description]. The key order is the order unused rules are listed in.
 const RULES = {
+  BADGES: ["Picked badges", "Live channels that can earn a badge you picked under Badge drops."],
   PRIORITIZED: ["Starred channels", "Channels you starred."],
   STREAK: ["Earn watch streaks", "Streams whose watch streak isn't earned yet (about 7 minutes per stream)."],
   LONGEST_STREAK: ["Longest watch streak", "Channels with the longest current watch streak first."],
@@ -662,7 +687,8 @@ function sortedRows(streamers) {
 function rowHtml({ s, pos }, i) {
   const chips = (s.online ? '<span class="chip live">live</span>' : "")
     + (s.watching ? '<span class="chip">watching</span>' : "")
-    + (s.source === "followers" ? '<span class="chip">followed</span>' : "");
+    + (s.source === "followers" ? '<span class="chip">followed</span>' : "")
+    + (s.source === "badge" ? '<span class="chip" title="Added for a badge drop, removed once the badge is earned">badge</span>' : "");
   const sub = s.online
     ? [s.game, s.title].filter(Boolean).join(" · ") + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
     : "Offline";
@@ -806,6 +832,7 @@ function render(st) {
   $("s-gained").textContent = signed(gained);
   $("s-gained").classList.toggle("gain", gained > 0);
   renderUptime();
+  renderBadges();
   if (!draft) renderRules();
   renderRows();
   renderListHint();
@@ -1188,6 +1215,81 @@ $("prio-save").addEventListener("click", async () => {
     showError(e.message);
   } finally {
     btn.disabled = false;
+  }
+});
+
+// === Badge drops === //
+// Drop campaigns that give a badge for watch time. Ticking one gives its channels a watch slot
+// (the BADGES rule); Add channels adds a few eligible live ones, removed again once it's earned.
+
+let badgesShown = "";  // only re-render when something changed, so focus and clicks aren't lost
+
+function badgeHtml(b) {
+  const pct = b.minutes_required ? Math.min(100, Math.round(b.minutes_watched / b.minutes_required * 100)) : 0;
+  const where = b.allowed_channels ? `${fmt(b.allowed_channels)} channels` : "any channel";
+  const meta = ["ends " + fmtDate(new Date(b.ends_at * 1000)).slice(0, 10), b.game, where].filter(Boolean).join(" · ");
+  const added = b.added_channels ? ` · ${fmt(b.added_channels)} added` : "";
+  return `<li class="badge-row ${b.earned ? "earned" : ""}" data-id="${esc(b.campaign_id)}">
+    <label class="badge-pick">
+      <input type="checkbox" ${b.picked && !b.earned ? "checked" : ""} ${b.earned ? "disabled" : ""} aria-label="Pick ${esc(b.name)}">
+      ${b.image ? `<img src="${esc(b.image)}" alt="" width="28" height="28" loading="lazy">` : ICON.award}
+      <span class="badge-text">
+        <span class="rule-name" title="${esc(b.name)}">${esc(b.name)}</span>
+        <span class="rule-desc" title="${esc(meta)}">${esc(meta)}</span>
+        <span class="progress"><span class="track"><span class="fill" style="width:${b.earned ? 100 : pct}%"></span></span>
+          ${b.earned ? '<span class="chip earned">earned</span>' : `<span class="mono">${fmt(b.minutes_watched)}/${fmt(b.minutes_required)} min${added}</span>`}</span>
+      </span>
+    </label>
+    ${b.earned ? "" : `<button type="button" class="btn secondary small add-ch" data-tip="Add channels"
+      data-hint="Adds up to 5 eligible live channels, most viewers first. They're removed again once the badge is earned">Add</button>`}
+  </li>`;
+}
+
+function renderBadges() {
+  const list = [...(status?.badges ?? [])].sort((a, b) => a.earned - b.earned || a.ends_at - b.ends_at);
+  const key = JSON.stringify(list);
+  if (key === badgesShown) return;
+  badgesShown = key;
+  $("badge-count").textContent = list.length ? fmt(list.length) : "";
+  if (!list.length) {
+    $("badges").innerHTML = `<li class="empty">${ICON.award}No badges for watch time are running right now.</li>`;
+    return;
+  }
+  const focused = document.activeElement?.closest("#badges li");
+  const focusedKind = document.activeElement?.matches("input") ? "input" : "button";
+  $("badges").innerHTML = list.map(badgeHtml).join("");
+  if (focused) $("badges").querySelector(`li[data-id="${CSS.escape(focused.dataset.id)}"] ${focusedKind}`)?.focus();
+}
+
+$("badges").addEventListener("change", async (ev) => {
+  const box = ev.target.closest("input");
+  const id = box?.closest("li").dataset.id;
+  if (!id) return;
+  // Not disabled while saving: that would drop keyboard focus.
+  try {
+    await send("PUT", "api/badges/" + encodeURIComponent(id), { picked: box.checked });
+  } catch (e) {
+    box.checked = !box.checked;
+    showError(e.message);
+  } finally {
+    refresh();
+  }
+});
+
+$("badges").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button.add-ch");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+  try {
+    const { added } = await (await send("POST", "api/badges/" + encodeURIComponent(btn.closest("li").dataset.id) + "/channels")).json();
+    toast(`Added ${added.join(", ")}`);
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Add";
+    refresh();
   }
 });
 

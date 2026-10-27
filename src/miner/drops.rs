@@ -100,17 +100,26 @@ impl Miner {
         let mut last_refresh = 0.0;
         loop {
             let streamers = self.streamers();
-            if !self.paused() && streamers.iter().any(|s| s.settings.claim_drops) {
+            // The defaults count too: badge drops are listed before any channel is added for them.
+            let claims_drops =
+                self.config.streamer_defaults.claim_drops || streamers.iter().any(|s| s.settings.claim_drops);
+            if !self.paused() && claims_drops {
                 if now() - last_refresh > 30.0 * 60.0 {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
                     match self.fetch_campaigns().await {
-                        Ok(c) => campaigns = c,
+                        Ok(c) => {
+                            self.set_badge_campaigns(&c);
+                            campaigns = c;
+                        }
                         Err(e) => warn!("Could not load drop campaigns: {e:#}"),
                     }
                 }
                 match self.twitch.inventory().await {
-                    Ok(inventory) => self.sync_campaigns(&mut campaigns, &inventory).await,
+                    Ok(inventory) => {
+                        self.sync_campaigns(&mut campaigns, &inventory).await;
+                        self.update_badge_progress(&inventory);
+                    }
                     Err(e) => warn!("Error while syncing inventory: {e:#}"),
                 }
                 for s in streamers.iter().filter(|s| s.drops_condition()) {
@@ -127,6 +136,8 @@ impl Miner {
                         .collect();
                     st.stream.campaigns = matching;
                 }
+                self.update_badge_targets();
+                self.prune_badge_channels();
             }
             tokio::time::sleep(Duration::from_secs(60)).await;
         }

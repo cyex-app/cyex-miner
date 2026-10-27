@@ -4,11 +4,14 @@ use serde_json::{json, Value};
 
 use crate::{
     config::{Config, EXAMPLE_CONFIG},
-    entities::streamer::{ChatPresence, Source, Streamer, StreamerSettings},
+    entities::{
+        drops::Campaign,
+        streamer::{ChatPresence, Source, Streamer, StreamerSettings},
+    },
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
-    twitch::{parse_channel_id, parse_stream_info, parse_watch_streak},
+    twitch::{parse_channel_id, parse_directory, parse_stream_info, parse_watch_streak},
 };
 
 #[test]
@@ -71,6 +74,61 @@ fn parses_watch_streak() {
     assert_eq!(parse_watch_streak(&resp(json!("7"))), Some(7));
     assert_eq!(parse_watch_streak(&resp(json!(3))), Some(3));
     assert_eq!(parse_watch_streak(&json!({ "data": { "channel": { "self": null } } })), None);
+}
+
+#[test]
+fn badge_rule_comes_first_when_listed() {
+    let list = [live("a"), live("b"), live("c")];
+    list[0].state().prioritized = true;
+    list[2].state().badge_drop = true;
+    let rules = [Priority::Badges, Priority::Prioritized, Priority::Order];
+    assert_eq!(names(&select_watching(&list, &rules)), ["c", "a"]);
+}
+
+fn campaign_json(drop: Value, allow: Value) -> Value {
+    json!({
+        "id": "camp", "name": "Launch", "startAt": "2020-01-01T00:00:00Z", "endAt": "2099-01-01T00:00:00Z",
+        "game": { "id": "g1", "displayName": "Game", "slug": "game" },
+        "allow": allow,
+        "timeBasedDrops": [drop],
+    })
+}
+
+fn drop_json(minutes: i64, subs: i64, kind: &str) -> Value {
+    json!({
+        "id": "drop", "name": "Watch", "requiredMinutesWatched": minutes, "requiredSubs": subs,
+        "startAt": "2020-01-01T00:00:00Z", "endAt": "2099-01-01T00:00:00Z",
+        "benefitEdges": [{ "benefit": { "id": "benefit", "name": "Launch badge", "distributionType": kind,
+            "imageAssetURL": "https://example.com/badge.png" } }],
+    })
+}
+
+#[test]
+fn finds_watch_time_badge_drops() {
+    let allow = json!({ "isEnabled": true, "channels": [{ "id": "1", "name": "Lumen_Fox" }] });
+    let c = Campaign::from_json(&campaign_json(drop_json(30, 0, "BADGE"), allow)).unwrap();
+    assert_eq!(c.game_slug, "game");
+    assert_eq!(c.allowed_channels, [("1".to_string(), "lumen_fox".to_string())]);
+    let badge = c.watch_badge_drop().unwrap();
+    assert_eq!(badge.minutes_required, 30);
+    assert_eq!(badge.badge.as_ref().unwrap().benefit_id, "benefit");
+
+    // A disabled allow list means any channel.
+    let open = json!({ "isEnabled": false, "channels": [{ "id": "1", "name": "x" }] });
+    assert!(Campaign::from_json(&campaign_json(drop_json(30, 0, "BADGE"), open)).unwrap().allowed_channels.is_empty());
+    // Subscriptions, no watch time, or not a badge: not a watch-time badge.
+    for drop in [drop_json(30, 1, "BADGE"), drop_json(0, 0, "BADGE"), drop_json(30, 0, "DIRECT_ENTITLEMENT")] {
+        assert!(Campaign::from_json(&campaign_json(drop, Value::Null)).unwrap().watch_badge_drop().is_none());
+    }
+}
+
+#[test]
+fn parses_game_directory() {
+    let resp = json!({ "data": { "game": { "streams": { "edges": [
+        { "node": { "broadcaster": { "id": "1", "login": "a" }, "viewersCount": 50 } },
+        { "node": { "broadcaster": null, "viewersCount": 9 } },
+    ] } } } });
+    assert_eq!(parse_directory(&resp), [("1".to_string(), "a".to_string(), 50)]);
 }
 
 /// A failed query must be an error, not "no such channel" or "offline": followers sync deletes on those.

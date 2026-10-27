@@ -27,8 +27,11 @@ use crate::{
     utils::{millify, now},
 };
 
+mod badges;
 mod drops;
 mod messages;
+
+pub use badges::BadgeView;
 
 /// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
 const PRIORITY_KEY: &str = "priority";
@@ -62,6 +65,7 @@ pub struct Miner {
     /// connected so balances and live status stay current in the web UI.
     paused: AtomicBool,
     pub started_at: f64,
+    badges: badges::BadgeState,
 }
 
 fn valid_login(name: &str) -> bool {
@@ -114,7 +118,6 @@ impl Miner {
         Self {
             twitch,
             config,
-            store,
             streamers: RwLock::new(Vec::new()),
             pubsub: PubSubPool::new(token, pubsub_messages),
             chat,
@@ -124,6 +127,8 @@ impl Miner {
             priority: RwLock::new(priority),
             paused: AtomicBool::new(paused),
             started_at: now(),
+            badges: badges::BadgeState::load(&store),
+            store,
         }
     }
 
@@ -393,18 +398,27 @@ impl Miner {
             .get_channel_id(username)
             .await?
             .ok_or_else(|| anyhow!("streamer {username} does not exist"))?;
+        self.add_channel(channel_id, username, Source::Manual).await
+    }
+
+    /// Adds a channel whose id is known to the end of the list. The caller reserves the name in `adding`.
+    async fn add_channel(&self, channel_id: String, username: &str, source: Source) -> Result<Arc<Streamer>> {
         if self.find_by_channel(&channel_id).is_some() {
             bail!("{username} is already being mined");
         }
         let settings = self.config.streamer_defaults.clone();
         self.store
-            .add_channel(&channel_id, username, Source::Manual, settings.prioritize, &json!({}))
+            .add_channel(&channel_id, username, source, settings.prioritize, &json!({}))
             .context("could not save the channel")?;
-        if let Err(e) = self.store.remove_from_blacklist(&channel_id) {
-            warn!("Could not remove {username} from the blacklist: {e:#}");
+        if source == Source::Manual {
+            if let Err(e) = self.store.remove_from_blacklist(&channel_id) {
+                warn!("Could not remove {username} from the blacklist: {e:#}");
+            }
+            // Added by hand: it stays, even if it was quick-added for a badge before.
+            self.forget_badge_channel(&channel_id);
         }
 
-        let streamer = Arc::new(Streamer::new(username.to_string(), channel_id, settings, Source::Manual));
+        let streamer = Arc::new(Streamer::new(username.to_string(), channel_id, settings, source));
         self.init_streamers(std::slice::from_ref(&streamer)).await;
         self.register(&streamer);
         // A channel that was already in the database (e.g. followed) keeps its old place.
@@ -513,6 +527,21 @@ impl Miner {
     /// Stops mining a channel and removes it from the list. It's also blacklisted, so it doesn't
     /// come back from the follow list; adding it again un-blacklists it.
     pub fn remove_streamer(&self, channel_id: &str) -> Result<()> {
+        let streamer = self.unregister(channel_id)?;
+        self.forget_badge_channel(channel_id);
+        let saved = self
+            .store
+            .remove_channel(channel_id)
+            .and_then(|_| self.store.add_to_blacklist(channel_id, &streamer.username));
+        if let Err(e) = saved {
+            warn!("Could not update the database: {e:#}");
+        }
+        self.event(format!("Removed {streamer}"));
+        Ok(())
+    }
+
+    /// Stops mining a channel: takes it out of the list, PubSub and chat. The database is left alone.
+    fn unregister(&self, channel_id: &str) -> Result<Arc<Streamer>> {
         let streamer = {
             let mut list = self.streamers.write().unwrap();
             let pos = list
@@ -525,16 +554,7 @@ impl Miner {
             self.pubsub.remove(&topic);
         }
         self.chat.leave(&streamer.username);
-
-        let saved = self
-            .store
-            .remove_channel(channel_id)
-            .and_then(|_| self.store.add_to_blacklist(channel_id, &streamer.username));
-        if let Err(e) = saved {
-            warn!("Could not update the database: {e:#}");
-        }
-        self.event(format!("Removed {streamer}"));
-        Ok(())
+        Ok(streamer)
     }
 
     pub fn set_prioritized(&self, channel_id: &str, prioritized: bool) -> Result<Arc<Streamer>> {

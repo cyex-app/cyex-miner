@@ -49,6 +49,8 @@ pub enum Source {
     Manual,
     /// Loaded from the account's follow list.
     Followers,
+    /// Quick-added for a picked badge drop; removed again once it's earned or the campaign ends.
+    Badge,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -76,6 +78,8 @@ pub struct StreamerState {
     pub prioritized: bool,
     /// The current watch streak on this channel, `None` until Twitch reported one.
     pub watch_streak: Option<u32>,
+    /// Live with a badge drop the user picked and hasn't earned yet, see `Miner::update_badge_targets`.
+    pub badge_drop: bool,
 }
 
 impl StreamerState {

@@ -52,12 +52,14 @@ fn source_name(source: Source) -> &'static str {
     match source {
         Source::Manual => "manual",
         Source::Followers => "followers",
+        Source::Badge => "badge",
     }
 }
 
 fn parse_source(name: &str) -> Source {
     match name {
         "followers" => Source::Followers,
+        "badge" => Source::Badge,
         _ => Source::Manual,
     }
 }
