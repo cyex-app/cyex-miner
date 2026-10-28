@@ -169,7 +169,10 @@
   .stat .v.gain { color: var(--green); }
 
   /* Channel table */
-  .list-hint { padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  /* One line whatever it says, so the table never moves when the hint changes; the full text is the title. */
+  .list-hint { padding: 8px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .list-foot { display: flex; justify-content: center; padding: 8px; border-top: 1px solid var(--border); }
   .list-hint.warn { color: var(--yellow); }
   .table-scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -199,7 +202,12 @@
 
   /* Drag to reorder */
   td.grip { width: 1%; padding-right: 0; }
-  #channels.no-reorder .grip { display: none; }
+  /* Locked, there's no handle column. Unlocked but sorted, the handles hide and keep their space,
+     so the columns don't move when the sort changes. */
+  #channels.locked .grip { display: none; }
+  #channels.no-reorder .handle { visibility: hidden; }
+  .icon-btn[aria-disabled="true"] { opacity: .4; cursor: default; }
+  .icon-btn[aria-disabled="true"]:hover { background: transparent !important; color: var(--muted) !important; }
   .icon-btn.handle { cursor: grab; touch-action: none; }
   tbody tr.dragging { position: relative; z-index: 2; background: var(--elevated); box-shadow: var(--shadow-pop); }
   tbody tr.dragging .handle { cursor: grabbing; color: var(--text); }
@@ -406,6 +414,9 @@
             <tbody id="rows"></tbody>
           </table>
         </div>
+        <div class="list-foot" id="list-foot" hidden>
+          <button class="btn ghost small" id="more-btn" type="button" aria-controls="rows"></button>
+        </div>
       </section>
 
       <div class="side">
@@ -535,9 +546,12 @@ let draft = null;         // [{ rule, on }] while the watch priority editor is o
 // Reordering is locked by default, so a stray drag can't change the order. Both settings are per browser.
 let orderLocked = true;
 let sortKey = "order";    // "order" or "<field>-<asc|desc>"
+const COLLAPSED_ROWS = 20;
+let showAll = false;      // all channels, or only the first COLLAPSED_ROWS
 try {
   orderLocked = localStorage.getItem("orderLocked") !== "0";
   sortKey = localStorage.getItem("sort") ?? "order";
+  showAll = localStorage.getItem("showAllChannels") === "1";
 } catch {}
 if (sortKey !== "order" && !(/^(\w+)-(asc|desc)$/.test(sortKey) && SORT_VALUE[sortKey.split("-")[0]])) sortKey = "order";
 
@@ -742,6 +756,7 @@ function renderRows() {
   // Don't re-render under the user's pointer; the next refresh after the drop catches up.
   if (drag || savingOrder || !status) return;
   const streamers = status.streamers;
+  renderListFoot(streamers.length);
   if (!streamers.length) {
     $("rows").innerHTML = `<tr><td colspan="8"><div class="empty">${ICON.tv}No channels yet. Add one to start mining.</div></td></tr>`;
     return;
@@ -750,7 +765,8 @@ function renderRows() {
   // the tooltip on the same ones.
   const focused = buttonKey(document.activeElement);
   const tipped = buttonKey(tipAnchor);
-  $("rows").innerHTML = sortedRows(streamers).map(rowHtml).join("");
+  const rows = sortedRows(streamers);
+  $("rows").innerHTML = (showAll ? rows : rows.slice(0, COLLAPSED_ROWS)).map(rowHtml).join("");
   findButton(focused)?.focus();
   if (tipped) {
     const el = findButton(tipped);
@@ -758,6 +774,22 @@ function renderRows() {
   }
   if (confirmRemove) placeRemovePop();
 }
+
+// Long lists show their first 20 rows (in the current sort) until Show all; the choice is kept per browser.
+function renderListFoot(count) {
+  const btn = $("more-btn");
+  $("list-foot").hidden = count <= COLLAPSED_ROWS;
+  btn.textContent = showAll ? "Show fewer" : `Show all ${fmt(count)} channels`;
+  btn.setAttribute("aria-expanded", String(showAll));
+}
+
+$("more-btn").addEventListener("click", () => {
+  showAll = !showAll;
+  try { localStorage.setItem("showAllChannels", showAll ? "1" : "0"); } catch {}
+  renderRows();
+  // Collapsing a long list would leave the button far below the view.
+  $("more-btn").scrollIntoView({ block: "nearest" });
+});
 
 // Identifies a row button across re-renders: [channel id, kind].
 function buttonKey(el) {
@@ -775,14 +807,15 @@ function renderListHint() {
   const crowded = liveStarred > 2 && status.priority.includes("PRIORITIZED");
   hint.classList.toggle("warn", crowded);
   if (crowded) {
-    hint.textContent = `${liveStarred} starred channels are live, but Twitch only counts 2 at a time. The ones higher in the list win.`;
+    hint.textContent = `${liveStarred} starred channels are live, but only 2 are watched at a time. Higher ones win.`;
   } else if (sortKey !== "order") {
-    hint.textContent = "Sorting only changes this view. The number is each channel's place in the list; click Channel to go back to list order.";
+    hint.textContent = "Sorting only changes this view. Click Channel to go back to list order.";
   } else {
     hint.textContent = orderLocked
-      ? "Unlock the order to drag channels into place. Higher channels win ties in every watch priority rule."
-      : "Drag the handle, or focus it and use the arrow keys, to reorder.";
+      ? "Unlock the order to drag channels into place. Higher channels win ties."
+      : "Drag a handle, or focus it and use the arrow keys, to reorder.";
   }
+  hint.title = hint.textContent;
 }
 
 function applySortState() {
@@ -813,12 +846,16 @@ function applySortState() {
   reset.setAttribute("aria-hidden", String(!sorted));
   reset.tabIndex = sorted ? 0 : -1;
 
+  // The lock stays put while sorted, greyed out: reordering only works in list order. aria-disabled
+  // rather than disabled, so its tooltip still says why.
   const lock = $("lock-btn");
+  $("channels").classList.toggle("locked", orderLocked);
   $("channels").classList.toggle("no-reorder", !canReorder());
-  lock.hidden = sortKey !== "order";
+  lock.setAttribute("aria-disabled", String(sorted));
   lock.setAttribute("aria-pressed", String(orderLocked));
   labelButton(lock, orderLocked ? ICON.lock : ICON.unlock, orderLocked ? "Order locked" : "Order unlocked",
-    orderLocked ? "Click to reorder channels by dragging" : "Click to lock the order so it can't change by accident");
+    sorted ? "Reordering only works in list order"
+      : orderLocked ? "Click to reorder channels by dragging" : "Click to lock the order so it can't change by accident");
   // The reset button just went invisible: keep keyboard focus on the lock that took over.
   if (resetFocused) lock.focus();
   renderListHint();
@@ -1070,7 +1107,8 @@ document.querySelector("#channels thead").addEventListener("click", (ev) => {
 labelButton($("reset-sort"), ICON.reset, "Back to list order", "Sorting only changes this view");
 $("reset-sort").addEventListener("click", () => setSort("order"));
 
-$("lock-btn").addEventListener("click", () => {
+$("lock-btn").addEventListener("click", (ev) => {
+  if (ev.currentTarget.getAttribute("aria-disabled") === "true") return;
   orderLocked = !orderLocked;
   try { localStorage.setItem("orderLocked", orderLocked ? "1" : "0"); } catch {}
   applySortState();

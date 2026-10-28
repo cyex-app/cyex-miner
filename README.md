@@ -43,6 +43,8 @@ the web UI:
 - **Sort** the table by clicking a column header (points, points gained this session, minutes watched or
   watch streak): highest first, click again for lowest first. Sorting only changes the view; clicking
   **Channel** or the reset button at the end of the header row goes back to list order, where reordering works.
+- Long lists show their first 20 channels (in the current sort); **Show all** expands it, and the browser
+  remembers the choice.
 - **Remove** asks in a small bubble next to the trash button, so removing takes a second, deliberate click.
 - **Star** a channel to give it a watch slot through the `PRIORITIZED` rule.
 - **Remove** a channel. It's also blacklisted so it doesn't come back from your follow list; adding it again
