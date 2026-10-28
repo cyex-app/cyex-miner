@@ -163,9 +163,9 @@
   .narrow { max-width: var(--measure-form); margin-inline: auto; }
 
   /* Status line */
-  /* Equal columns sharing the bar's whole width: 6 in a row, or 3 / 2 per row when narrow, so rows are
-     always full. */
-  .status-line { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 16px;
+  /* Columns as wide as their stats, with the spare width shared out as equal gaps: the first stat sits
+     on the left padding, the last on the right. 6 in a row, or 3 / 2 per row when narrow. */
+  .status-line { display: grid; grid-template-columns: repeat(6, minmax(0, auto)); justify-content: space-between; gap: 12px 16px;
     padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); }
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .stat .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -332,8 +332,8 @@
     .tip, .toast, .pop { animation: none; }
   }
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 150ms; }
-  @media (max-width: 1000px) { .status-line { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 420px) { .status-line { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 1000px) { .status-line { grid-template-columns: repeat(3, minmax(0, auto)); } }
+  @media (max-width: 420px) { .status-line { grid-template-columns: repeat(2, minmax(0, auto)); } }
   @media (max-width: 720px) {
     .hide-sm { display: none; }
     .user { max-width: 40vw; }
