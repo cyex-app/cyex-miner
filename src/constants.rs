@@ -58,19 +58,19 @@ pub const JOIN_RAID: Op = Op(
 );
 pub const INVENTORY: Op = Op(
     "Inventory",
-    "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
+    "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
 );
 pub const VIEWER_DROPS_DASHBOARD: Op = Op(
     "ViewerDropsDashboard",
-    "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
+    "c16bb890cc8ce7647a96ee69cd313d423a378a3dedadf630a1017cde18975feb",
 );
 pub const DROP_CAMPAIGN_DETAILS: Op = Op(
     "DropCampaignDetails",
-    "f6396f5ffdde867a8f6f6da18286e4baf02e5b98d14689a69b5af320a4c7b7b8",
+    "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
 );
 pub const AVAILABLE_DROPS: Op = Op(
     "DropsHighlightService_AvailableDrops",
-    "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
+    "782dad0f032942260171d2d80a654f88bdd0c5a9dddc392e9bc92218a0f42d20",
 );
 /// Live channels in a game's directory.
 pub const DIRECTORY_PAGE_GAME: Op = Op(

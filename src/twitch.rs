@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     auth::Credentials,
@@ -199,6 +199,11 @@ impl Twitch {
         let status = resp.status();
         let text = resp.text().await?;
         debug!("GQL {} -> {status}: {text}", body["operationName"]);
+        // Twitch retires persisted queries; the reply then has no data and callers see nothing.
+        if text.contains("PersistedQueryNotFound") {
+            let op = if body.is_array() { &body[0]["operationName"] } else { &body["operationName"] };
+            warn!("Twitch no longer accepts the {op} query; its hash in constants.rs needs updating");
+        }
         serde_json::from_str(&text).with_context(|| format!("GQL returned {status}: {text}"))
     }
 
@@ -434,24 +439,28 @@ impl Twitch {
 
     pub async fn inventory(&self) -> Result<Value> {
         let resp = self
-            .gql(&INVENTORY.with(json!({ "fetchRewardCampaigns": true })))
+            .gql(&INVENTORY.with(json!({ "fetchRewardCampaigns": false })))
             .await?;
-        Ok(resp["data"]["currentUser"]["inventory"].clone())
+        let inventory = &resp["data"]["currentUser"]["inventory"];
+        if inventory.is_null() {
+            bail!("unexpected response: {resp}");
+        }
+        Ok(inventory.clone())
     }
 
     pub async fn active_drop_campaigns(&self) -> Result<Vec<Value>> {
         let resp = self
-            .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": true })))
+            .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": false })))
             .await?;
-        Ok(resp["data"]["currentUser"]["dropCampaigns"]
-            .as_array()
-            .map(|c| {
-                c.iter()
-                    .filter(|x| x["status"].as_str() == Some("ACTIVE"))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default())
+        // A failed query must not read as "no campaigns running".
+        let Some(campaigns) = resp["data"]["currentUser"]["dropCampaigns"].as_array() else {
+            bail!("unexpected response: {resp}");
+        };
+        Ok(campaigns
+            .iter()
+            .filter(|x| x["status"].as_str() == Some("ACTIVE"))
+            .cloned()
+            .collect())
     }
 
     pub async fn campaign_details(&self, ids: &[String]) -> Result<Vec<Value>> {
@@ -473,6 +482,9 @@ impl Twitch {
                     result.push(campaign.clone());
                 }
             }
+        }
+        if result.is_empty() && !ids.is_empty() {
+            bail!("no details for any of the {} running drop campaigns", ids.len());
         }
         Ok(result)
     }

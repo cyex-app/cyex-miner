@@ -11,7 +11,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::Miner;
 use crate::{
@@ -170,6 +170,8 @@ impl Miner {
                 })
                 .collect();
             *badges = fresh;
+            // Says where an empty Badge drops list comes from: no campaigns, or none giving a badge.
+            info!("{} drop campaigns running, {} with a badge for watch time", campaigns.len(), badges.len());
             badges.iter().map(|b| b.campaign_id.clone()).collect()
         };
         let saved = {
