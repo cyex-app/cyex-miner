@@ -23,7 +23,7 @@ use crate::{
     priority::{self, Priority},
     pubsub::PubSubPool,
     store::{ChannelRow, Store},
-    twitch::{PointsContext, StreamInfo, Twitch},
+    twitch::{ChannelHit, PointsContext, StreamInfo, Twitch},
     utils::{millify, now},
 };
 
@@ -396,6 +396,28 @@ impl Miner {
                 row.login = login.clone();
             }
         }
+    }
+
+    /// Channels for the add field's suggestions: Twitch's search results, plus the channel spelled
+    /// exactly like the query when the search left it out (offline and small channels often are).
+    pub async fn search_channels(&self, query: &str) -> Vec<ChannelHit> {
+        let mut hits = match self.twitch.search_channels(query).await {
+            Ok(hits) => hits,
+            Err(e) => {
+                warn!("Channel search failed: {e:#}");
+                Vec::new()
+            }
+        };
+        let exact = query.trim().trim_start_matches('@').to_lowercase();
+        if valid_login(&exact) && !hits.iter().any(|h| h.login == exact) {
+            // Name, profile picture and stream in one request; nothing when the channel doesn't exist.
+            match self.twitch.channel_card(&exact).await {
+                Ok(Some(card)) => hits.insert(0, card),
+                Ok(None) => {}
+                Err(e) => warn!("Could not look up {exact}: {e:#}"),
+            }
+        }
+        hits
     }
 
     /// Adds a channel by name (from the web UI) to the end of the list.

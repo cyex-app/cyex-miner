@@ -114,6 +114,22 @@
   .inline-form { display: flex; gap: 8px; }
   .inline-form .field { flex: 1; }
 
+  /* Channel suggestions under the add field */
+  .combo { position: relative; flex: 1; min-width: 0; display: flex; }
+  .suggest { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: var(--z-popover); margin: 0; padding: 4px;
+    list-style: none; max-height: 360px; overflow-y: auto; background: var(--elevated); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); box-shadow: var(--shadow-pop); animation: pop-in var(--base) var(--ease); }
+  .suggest li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+  .suggest li[aria-selected="true"] { background: var(--surface-hover); }
+  .suggest li[aria-disabled="true"] { cursor: default; }
+  .suggest .avatar { width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%; display: grid; place-items: center;
+    background: var(--neutral-chip); color: var(--muted); font-weight: 700; font-size: .8rem; object-fit: cover; }
+  .suggest .s-text { flex: 1; min-width: 0; }
+  .suggest .s-name { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .suggest .s-name span:first-child, .suggest .s-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .suggest .s-sub { display: block; color: var(--dim); font-size: var(--text-hint); }
+  .suggest .s-note { padding: 8px; color: var(--dim); font-size: var(--text-hint); cursor: default; }
+
   /* Segmented control */
   /* Sortable column headers: click for highest first, again for lowest first. The arrow's space is
      always kept, so labels don't shift when it appears. */
@@ -168,7 +184,11 @@
   .options { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
   .options legend { padding: 0; margin-bottom: 8px; }
   .option { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-  .amount-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); }
+  .setting-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); cursor: text; }
+  .setting-line:first-of-type { margin-top: 4px; }
+  .input-unit { display: flex; align-items: center; gap: 6px; flex-shrink: 0; color: var(--muted); font-size: var(--text-sub); }
+  .input-unit > span { min-width: 3.4em; }
   .field.num-field { width: 64px; padding: 6px 8px; font: 500 .85rem var(--font-mono); text-align: right; }
   .field.num-field.wide { width: 96px; }
   #pred-example { margin-top: 6px; }
@@ -178,6 +198,7 @@
   .bet-main .rule-name, .bet-main .rule-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bet .mono { color: var(--muted); font-size: .8rem; }
   .bets .none { padding: 8px 0 0; color: var(--dim); font-size: var(--text-hint); }
+  .bets-more { width: 100%; margin-top: 4px; }
 
   /* Chips */
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
@@ -370,7 +391,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: 0s !important; }
-    .tip, .toast, .pop { animation: none; }
+    .tip, .toast, .pop, .suggest { animation: none; }
   }
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 150ms; }
   @media (max-width: 1000px) { .status-line { grid-template-columns: repeat(3, minmax(0, auto)); } }
@@ -471,7 +492,11 @@
           <header><h2>Add a channel</h2></header>
           <div class="body">
             <form id="add" class="inline-form">
-              <input class="field" type="text" id="username" placeholder="Twitch username or channel URL" autocomplete="off" required>
+              <div class="combo">
+                <input class="field" type="text" id="username" placeholder="Search Twitch or paste a channel URL" autocomplete="off"
+                  required role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest">
+                <ul class="suggest" id="suggest" role="listbox" aria-label="Channels" hidden></ul>
+              </div>
               <button class="btn primary" type="submit" id="add-btn">Add</button>
             </form>
           </div>
@@ -524,17 +549,24 @@
             </fieldset>
             <div>
               <span class="label">Bet size</span>
-              <div class="amount-row">
-                <input class="field num-field" type="number" id="pred-percent" min="1" max="100" step="1" aria-label="Percent of the channel's points">
-                <span>% of the channel's points, at most</span>
-                <input class="field num-field wide" type="number" id="pred-max" min="10" step="10" aria-label="Most points per bet">
-                <span>points</span>
-              </div>
+              <label class="setting-line">
+                <span><span class="rule-name">Share of your points</span>
+                  <span class="rule-desc">Of what you have on that channel.</span></span>
+                <span class="input-unit"><input class="field num-field" type="number" id="pred-percent" min="1" max="100" step="1">
+                  <span>%</span></span>
+              </label>
+              <label class="setting-line">
+                <span><span class="rule-name">Most per bet</span>
+                  <span class="rule-desc">Never bets more than this.</span></span>
+                <span class="input-unit"><input class="field num-field wide" type="number" id="pred-max" min="10" step="10">
+                  <span>points</span></span>
+              </label>
               <p class="hint" id="pred-example"></p>
             </div>
             <div>
               <span class="label">Recent bets</span>
               <ul class="bets" id="bets"></ul>
+              <button class="btn ghost small bets-more" id="bets-more" type="button" aria-controls="bets" hidden></button>
             </div>
           </div>
         </section>
@@ -1121,6 +1153,140 @@ $("add").addEventListener("submit", async (ev) => {
   }
 });
 
+// === Channel suggestions === //
+// Twitch's search results, ranked like match-sorter: how well the name matches first (exact, starts
+// with, a word starts with, contains, initials, letters in order), then live channels by viewers,
+// then offline ones by followers. A channel spelled exactly like the query always shows.
+
+let suggestions = [];      // the ranked hits on show
+let activeSuggestion = -1;
+let searchTimer = 0, searchAbort = null;
+
+function matchRank(query, text) {
+  if (!text) return 0;
+  if (text === query) return 7;
+  const t = text.toLowerCase(), q = query.toLowerCase();
+  if (t === q) return 6;
+  if (t.startsWith(q)) return 5;
+  const words = t.split(/[\s_\-.]+/).filter(Boolean);
+  if (words.some((w) => w.startsWith(q))) return 4;
+  if (t.includes(q)) return 3;
+  if (words.length > 1 && words.map((w) => w[0]).join("").includes(q)) return 2;
+  let i = 0;
+  for (const c of t) if (c === q[i]) i++;
+  return i === q.length ? 1 : 0;
+}
+
+function rankHits(query, hits) {
+  const q = normalize(query);
+  return hits
+    .map((h) => ({ ...h, rank: Math.max(matchRank(q, h.login), matchRank(q, h.display_name)) }))
+    .filter((h) => h.rank > 0)
+    .sort((a, b) => b.rank - a.rank || b.live - a.live
+      || (a.live ? b.viewers - a.viewers : (b.followers ?? -1) - (a.followers ?? -1)))
+    .slice(0, 8);
+}
+
+function renderSuggestions(note) {
+  const list = $("suggest");
+  const open = suggestions.length > 0 || !!note;
+  list.hidden = !open;
+  $("username").setAttribute("aria-expanded", String(open));
+  if (!open) return $("username").removeAttribute("aria-activedescendant");
+  list.innerHTML = suggestions.map((h, i) => {
+    const image = /^https:\/\//.test(h.image)
+      ? `<img class="avatar" src="${esc(h.image)}" alt="" width="28" height="28" loading="lazy">`
+      : `<span class="avatar" aria-hidden="true">${esc(h.display_name.slice(0, 1).toUpperCase())}</span>`;
+    const sub = h.live
+      ? ["Live", `${fmt(h.viewers)} viewers`, h.game].filter(Boolean).join(" · ")
+      : ["Offline", h.followers != null ? `${fmt(h.followers)} followers` : ""].filter(Boolean).join(" · ");
+    return `<li role="option" id="sg-${i}" aria-selected="${i === activeSuggestion}" ${h.added ? 'aria-disabled="true"' : ""}>
+      ${image}<span class="s-text"><span class="s-name"><span>${esc(h.display_name)}</span>
+        ${h.live ? '<span class="chip live">live</span>' : ""}${h.added ? '<span class="chip">in list</span>' : ""}</span>
+        <span class="s-sub">${esc(sub)}</span></span></li>`;
+  }).join("") + (note ? `<li class="s-note" aria-disabled="true">${esc(note)}</li>` : "");
+  if (activeSuggestion >= 0) $("username").setAttribute("aria-activedescendant", "sg-" + activeSuggestion);
+  else $("username").removeAttribute("aria-activedescendant");
+}
+
+function closeSuggestions() {
+  clearTimeout(searchTimer);
+  searchAbort?.abort();
+  suggestions = [];
+  activeSuggestion = -1;
+  renderSuggestions();
+}
+
+$("username").addEventListener("input", () => {
+  const raw = $("username").value.trim();
+  clearTimeout(searchTimer);
+  // A pasted URL or too short a name: nothing to search.
+  if (raw.length < 2 || /twitch\.tv\//i.test(raw)) return closeSuggestions();
+  searchTimer = setTimeout(async () => {
+    searchAbort?.abort();
+    searchAbort = new AbortController();
+    try {
+      const res = await api("api/search?q=" + encodeURIComponent(normalize(raw)), { signal: searchAbort.signal });
+      if (!res.ok || $("username").value.trim() !== raw) return;
+      suggestions = rankHits(raw, await res.json());
+      activeSuggestion = suggestions.findIndex((h) => !h.added);
+      renderSuggestions(suggestions.length ? "" : "No channel found by that name");
+    } catch (e) {
+      if (e.name !== "AbortError") closeSuggestions();
+    }
+  }, 250);
+});
+
+function pickSuggestion(i) {
+  const h = suggestions[i];
+  if (!h || h.added) return;
+  $("username").value = h.login;
+  closeSuggestions();
+  $("add").requestSubmit();
+}
+
+$("username").addEventListener("keydown", (ev) => {
+  if ($("suggest").hidden) return;
+  const step = { ArrowDown: 1, ArrowUp: -1 }[ev.key];
+  if (step) {
+    ev.preventDefault();
+    const n = suggestions.length;
+    if (!n) return;
+    // Skip channels already in the list.
+    let i = activeSuggestion;
+    for (let k = 0; k < n; k++) {
+      i = (i + step + n) % n;
+      if (!suggestions[i].added) break;
+    }
+    activeSuggestion = i;
+    renderSuggestions();
+    $("sg-" + i)?.scrollIntoView({ block: "nearest" });
+  } else if (ev.key === "Enter" && activeSuggestion >= 0) {
+    ev.preventDefault();
+    pickSuggestion(activeSuggestion);
+  } else if (ev.key === "Escape") {
+    closeSuggestions();
+  }
+});
+// A profile picture that doesn't load becomes the letter avatar.
+$("suggest").addEventListener("error", (ev) => {
+  const img = ev.target;
+  if (!img.matches?.("img.avatar")) return;
+  const letter = document.createElement("span");
+  letter.className = "avatar";
+  letter.setAttribute("aria-hidden", "true");
+  letter.textContent = (img.closest("li")?.querySelector(".s-name span")?.textContent ?? "?").slice(0, 1).toUpperCase();
+  img.replaceWith(letter);
+}, true);
+
+// pointerdown, so the field doesn't lose focus (and close the list) before the pick.
+$("suggest").addEventListener("pointerdown", (ev) => {
+  ev.preventDefault();
+  const li = ev.target.closest("li[role=option]");
+  if (li) pickSuggestion(Number(li.id.slice(3)));
+});
+$("username").addEventListener("blur", () => setTimeout(closeSuggestions, 0));
+
 $("rows").addEventListener("click", async (ev) => {
   const star = ev.target.closest("button.star");
   if (star) {
@@ -1523,6 +1689,13 @@ $("fill-slots").addEventListener("change", async (ev) => {
 
 let predSaving = false;
 let betsShown = "";
+let betsLimit = 5;         // bets on show
+
+$("bets-more").addEventListener("click", () => {
+  const total = status?.predictions?.bets.length ?? 0;
+  betsLimit = betsLimit >= total ? 5 : betsLimit === 5 ? 10 : betsLimit + 10;
+  renderPredictions();
+});
 
 function renderPredictions() {
   const p = status?.predictions;
@@ -1537,13 +1710,19 @@ function renderPredictions() {
     if (document.activeElement !== $("pred-max")) $("pred-max").value = s.max_points;
     const example = Math.min(Math.floor(10_000 * s.percent / 100), s.max_points);
     $("pred-example").textContent = example >= 10
-      ? `With 10.000 points on a channel, that's a bet of ${fmt(example)}.`
-      : "With 10.000 points on a channel, that's under the 10 point minimum, so it won't bet.";
+      ? `Example: with 10.000 points on a channel, it bets ${fmt(example)}.`
+      : "Example: with 10.000 points on a channel, that's under Twitch's 10 point minimum, so it skips the bet.";
   }
-  const key = JSON.stringify([p.bets, s.enabled]);
+  const key = JSON.stringify([p.bets, s.enabled, betsLimit]);
   if (key === betsShown) return;
   betsShown = key;
-  $("bets").innerHTML = p.bets.length ? p.bets.map((b) => {
+  // 5 bets, then 10, 20, 30... on request; at the end the button collapses back to 5.
+  const more = $("bets-more");
+  const next = Math.min(p.bets.length, betsLimit === 5 ? 10 : betsLimit + 10);
+  more.hidden = p.bets.length <= 5;
+  more.textContent = betsLimit >= p.bets.length ? "Show fewer" : `Show ${fmt(next - betsLimit)} more`;
+  more.setAttribute("aria-expanded", String(betsLimit > 5));
+  $("bets").innerHTML = p.bets.length ? p.bets.slice(0, betsLimit).map((b) => {
     const [cls, label] = {
       won: ["won", "+" + fmt(b.net)],
       lost: ["lost", "−" + fmt(-b.net)],

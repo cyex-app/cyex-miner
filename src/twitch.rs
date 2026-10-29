@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Mutex, time::Duration};
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use reqwest::Client;
+use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{debug, warn};
 
@@ -97,6 +98,62 @@ fn parse_campaign_ids(resp: &Value) -> Vec<String> {
         .as_array()
         .map(|c| c.iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
         .unwrap_or_default()
+}
+
+/// A channel in search results, as the web UI's suggestions show it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelHit {
+    pub login: String,
+    pub display_name: String,
+    pub image: String,
+    /// `None` when unknown (an exact-name lookup outside the search results).
+    pub followers: Option<i64>,
+    pub live: bool,
+    pub viewers: i64,
+    pub game: Option<String>,
+}
+
+/// The channels in a `SearchResultsPage_SearchResults` response.
+pub(crate) fn parse_search(resp: &Value) -> Vec<ChannelHit> {
+    resp["data"]["searchFor"]["channels"]["edges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let item = &e["item"];
+            let login = item["login"].as_str()?.to_string();
+            let stream = &item["stream"];
+            Some(ChannelHit {
+                display_name: item["displayName"].as_str().unwrap_or(&login).to_string(),
+                image: item["profileImageURL"].as_str().unwrap_or_default().to_string(),
+                followers: item["followers"]["totalCount"].as_i64(),
+                live: !stream.is_null(),
+                viewers: stream["viewersCount"].as_i64().unwrap_or(0),
+                game: stream["game"]["displayName"].as_str().map(str::to_string),
+                login,
+            })
+        })
+        .collect()
+}
+
+/// One channel's name, profile picture and stream from a `VideoPlayerStreamInfoOverlayChannel`
+/// response, as a search suggestion. `None` when there's no such channel.
+pub(crate) fn parse_channel_card(resp: &Value, login: &str) -> Option<ChannelHit> {
+    let user = &resp["data"]["user"];
+    if user.is_null() {
+        return None;
+    }
+    let stream = &user["stream"];
+    let live = !stream.is_null();
+    Some(ChannelHit {
+        login: user["login"].as_str().unwrap_or(login).to_string(),
+        display_name: user["displayName"].as_str().unwrap_or(login).to_string(),
+        image: user["profileImageURL"].as_str().unwrap_or_default().to_string(),
+        followers: user["followers"]["totalCount"].as_i64(),
+        live,
+        viewers: stream["viewersCount"].as_i64().unwrap_or(0),
+        game: user["broadcastSettings"]["game"]["displayName"].as_str().filter(|_| live).map(str::to_string),
+    })
 }
 
 /// Live channels from a game directory page, as (id, login, viewers).
@@ -418,6 +475,31 @@ impl Twitch {
             .into_iter()
             .map(|r| r.map(|resp| parse_campaign_ids(&resp)).unwrap_or_default())
             .collect()
+    }
+
+    /// One channel with its profile picture and stream, for a suggestion the search left out.
+    pub async fn channel_card(&self, login: &str) -> Result<Option<ChannelHit>> {
+        let resp = self.gql(&STREAM_INFO.with(json!({ "channel": login }))).await?;
+        if resp["data"].is_null() {
+            bail!("unexpected response: {resp}");
+        }
+        Ok(parse_channel_card(&resp, login))
+    }
+
+    /// Channels matching a search, from Twitch's search page.
+    pub async fn search_channels(&self, query: &str) -> Result<Vec<ChannelHit>> {
+        let resp = self
+            .gql(&SEARCH_RESULTS.with(json!({
+                "query": query,
+                "includeIsDJ": false,
+                "platform": "web",
+                "options": { "targets": [{ "index": "CHANNEL" }], "shouldSkipDiscoveryControl": false },
+            })))
+            .await?;
+        if resp["data"]["searchFor"].is_null() {
+            bail!("unexpected response: {resp}");
+        }
+        Ok(parse_search(&resp))
     }
 
     /// The most watched live channels in a game (by its directory slug), as (id, login, viewers).

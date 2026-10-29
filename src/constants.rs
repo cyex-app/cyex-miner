@@ -77,6 +77,11 @@ pub const MAKE_PREDICTION: Op = Op(
     "MakePrediction",
     "b44682ecc88358817009f20e69d75081b1e58825bb40aa53d5dbadcc17c881d8",
 );
+/// Twitch's search page: channels with followers, and viewers when live.
+pub const SEARCH_RESULTS: Op = Op(
+    "SearchResultsPage_SearchResults",
+    "f6c2575aee4418e8a616e03364d8bcdbf0b10a5c87b59f523569dacc963e8da5",
+);
 /// Live channels in a game's directory.
 pub const DIRECTORY_PAGE_GAME: Op = Op(
     "DirectoryPage_Game",

@@ -12,7 +12,9 @@ use crate::{
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
-    twitch::{parse_channel_id, parse_directory, parse_stream_info, parse_watch_streak},
+    twitch::{
+        parse_channel_card, parse_channel_id, parse_directory, parse_search, parse_stream_info, parse_watch_streak,
+    },
 };
 
 #[test]
@@ -160,6 +162,31 @@ fn parses_event_badges() {
     let events = parse_event_badges(&resp, 1_800_000_000.0);
     assert_eq!(events.len(), 1);
     assert_eq!(events["true damage fan"], "https://x/1");
+}
+
+#[test]
+fn parses_channel_search() {
+    let resp = json!({ "data": { "searchFor": { "channels": { "edges": [
+        { "item": { "login": "lumen_fox", "displayName": "Lumen_Fox", "profileImageURL": "https://x/a.png",
+            "followers": { "totalCount": 1200 }, "stream": { "viewersCount": 88, "game": { "displayName": "Art" } } } },
+        { "item": { "login": "quietoak", "followers": null, "stream": null } },
+        { "item": { "displayName": "no login" } },
+    ] } } } });
+    let hits = parse_search(&resp);
+    assert_eq!(hits.len(), 2);
+    assert_eq!((hits[0].live, hits[0].viewers, hits[0].followers), (true, 88, Some(1200)));
+    assert_eq!(hits[0].game.as_deref(), Some("Art"));
+    assert_eq!((hits[1].display_name.as_str(), hits[1].live, hits[1].followers), ("quietoak", false, None));
+}
+
+#[test]
+fn parses_channel_card() {
+    let offline = json!({ "data": { "user": { "displayName": "TinyOne", "profileImageURL": "https://x/p.png",
+        "stream": null, "broadcastSettings": { "game": { "displayName": "Art" } } } } });
+    let card = parse_channel_card(&offline, "tinyone").unwrap();
+    assert_eq!((card.login.as_str(), card.display_name.as_str(), card.image.as_str()), ("tinyone", "TinyOne", "https://x/p.png"));
+    assert!(!card.live && card.game.is_none()); // the last game only counts while live
+    assert!(parse_channel_card(&json!({ "data": { "user": null } }), "nobody").is_none());
 }
 
 #[test]

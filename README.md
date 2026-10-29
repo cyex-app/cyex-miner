@@ -36,7 +36,9 @@ that changes its name keeps its place, star and settings: logins are refreshed f
 `config.toml` are imported into the database; after that those lists are ignored and channels are managed in
 the web UI:
 
-- **Add** a channel by name or URL. It goes to the end of the list.
+- **Add** a channel by name or URL. It goes to the end of the list. While you type, suggestions from Twitch's search
+  show up: the best name matches first, then live channels by viewers and offline ones by followers. A channel spelled
+  exactly like what you typed is always shown, even offline or small.
 - **Drag** the handle to reorder (or focus it and use the arrow keys). Higher channels win ties in every
   watch priority rule, and the `ORDER` rule follows the list. The number in front of each channel is its
   place in the list.

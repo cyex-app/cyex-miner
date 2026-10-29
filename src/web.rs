@@ -1,7 +1,7 @@
 //! Small web UI + JSON API to watch the miner and add/remove channels.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     convert::Infallible,
     fs,
     path::PathBuf,
@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use axum::{
     async_trait,
-    extract::{FromRequestParts, Path, Request, State},
+    extract::{FromRequestParts, Path, Query, Request, State},
     http::{header, request::Parts, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{
@@ -31,6 +31,7 @@ use crate::{
     entities::streamer::{HistoryEntry, Source, Streamer},
     miner::{BadgeView, LogEvent, Miner, PredictionSettings, PredictionsView},
     priority::Priority,
+    twitch::ChannelHit,
     utils::random_alnum,
 };
 
@@ -103,6 +104,7 @@ pub async fn serve(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
         .route("/api/status", get(status))
         .route("/api/stream", get(stream))
         .route("/api/streamers", post(add_streamer))
+        .route("/api/search", get(search_channels))
         .route("/api/streamers/order", put(reorder))
         .route("/api/streamers/:id", delete(remove_streamer))
         .route("/api/streamers/:id/prioritize", put(set_prioritize))
@@ -481,4 +483,33 @@ async fn set_predictions(Ready(miner): Ready, Json(body): Json<PredictionSetting
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
+}
+
+#[derive(Deserialize)]
+struct Search {
+    q: String,
+}
+
+#[derive(Serialize)]
+struct SearchHit {
+    #[serde(flatten)]
+    hit: ChannelHit,
+    /// Already in the channel list.
+    added: bool,
+}
+
+/// Suggestions for the add field. The web UI ranks them.
+async fn search_channels(Ready(miner): Ready, Query(params): Query<Search>) -> Response {
+    let query = params.q.trim();
+    if query.is_empty() || query.len() > 50 {
+        return Json(Vec::<SearchHit>::new()).into_response();
+    }
+    let listed: HashSet<String> = miner.streamers().iter().map(|s| s.username.clone()).collect();
+    let hits: Vec<SearchHit> = miner
+        .search_channels(query)
+        .await
+        .into_iter()
+        .map(|hit| SearchHit { added: listed.contains(&hit.login), hit })
+        .collect();
+    Json(hits).into_response()
 }

@@ -24,8 +24,8 @@ const BET_BEFORE_CLOSE: f64 = 6.0;
 /// Twitch's limits for one bet.
 const MIN_BET: i64 = 10;
 const MAX_BET: i64 = 250_000;
-/// Bets kept for the web UI.
-const RECENT: usize = 20;
+/// Bets kept for the web UI, which shows 5 and more on request.
+const RECENT: usize = 100;
 
 /// How the outcome to bet on is picked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
