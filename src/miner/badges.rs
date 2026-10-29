@@ -30,9 +30,9 @@ const PICKED_KEY: &str = "badges";
 const ADDED_KEY: &str = "badge_channels";
 /// Channels added per quick add. Only 2 are watched at a time; the rest are backups.
 const QUICK_ADD: usize = 5;
-/// `meta` key for the "farm badges automatically" switch ("1" when on).
+/// `meta` key for the "Auto select badges" switch ("1" when on).
 const AUTO_KEY: &str = "badges_auto";
-/// How often auto farming tries to add channels for a badge none of the list can earn.
+/// How often auto select tries to add channels for a badge none of the list can earn.
 const AUTO_ADD_RETRY_SECS: f64 = 30.0 * 60.0;
 
 /// A badge drop as the web UI shows it.
@@ -64,7 +64,7 @@ pub struct EarnedBadge {
     pub earned_at: f64,
     /// The channel being watched for it when it was earned.
     pub channel: Option<String>,
-    /// Picked by badge farming rather than by hand.
+    /// Picked by auto select rather than by hand.
     pub auto: bool,
 }
 
@@ -134,9 +134,9 @@ pub(super) struct BadgeState {
     added: Mutex<HashMap<String, AddedChannel>>,
     /// Twitch's free event badges from `EVENT_BADGES_URL`: lowercase name -> image URL.
     events: RwLock<HashMap<String, String>>,
-    /// Farm badges automatically: pick every badge, and add channels for it when needed.
+    /// Auto select badges: pick every badge, and add channels for it when needed.
     auto: AtomicBool,
-    /// When auto farming last tried to add channels, by campaign id.
+    /// When auto select last tried to add channels, by campaign id.
     auto_tried: Mutex<HashMap<String, f64>>,
     /// Badges earned since the miner started, oldest first.
     earned: Mutex<Vec<EarnedBadge>>,
@@ -431,19 +431,19 @@ impl Miner {
         self.badges.auto.load(Ordering::Relaxed)
     }
 
-    /// Turns badge farming on or off; saved in the database. Turning it on picks every badge right
+    /// Turns auto select on or off; saved in the database. Turning it on picks every badge right
     /// away; channels are added by the campaigns loop (`run_auto_badges`).
     pub fn set_auto_badges(&self, on: bool) -> Result<()> {
         self.store
             .set_meta(AUTO_KEY, if on { "1" } else { "0" })
-            .context("could not save the badge farming setting")?;
+            .context("could not save the auto select setting")?;
         if self.badges.auto.swap(on, Ordering::Relaxed) == on {
             return Ok(());
         }
         self.event(if on {
-            "Farming badges automatically: every badge drop is picked, and channels are added when needed"
+            "Auto selecting badges: every badge drop is picked, and channels are added when needed"
         } else {
-            "Stopped farming badges automatically"
+            "Stopped auto selecting badges"
         });
         if on {
             self.badges.auto_tried.lock().unwrap().clear();
@@ -472,7 +472,7 @@ impl Miner {
         }
     }
 
-    /// Badge farming, run every minute: picks new badges, and for a badge no channel in the list
+    /// Auto select, run every minute: picks new badges, and for a badge no channel in the list
     /// can earn right now, adds live channels for it (at most every 30 minutes per badge).
     pub(super) async fn run_auto_badges(&self) {
         if !self.auto_badges() || self.paused() {

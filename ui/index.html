@@ -532,7 +532,7 @@
               <input type="checkbox" id="badges-all"><span>All</span></label>
           </header>
           <label class="switch-row badge-auto">
-            <span><span class="rule-name">Farm badges automatically</span>
+            <span><span class="rule-name">Auto select badges</span>
               <span class="rule-desc">Picks every badge as it starts, and adds live channels for it when none of yours can earn it.
                 They're removed again once it's earned.</span></span>
             <input type="checkbox" class="switch" role="switch" id="badges-auto">
@@ -1859,7 +1859,7 @@ function renderBadges() {
     all.checked = list.length > 0 && picked === list.length;
     all.indeterminate = picked > 0 && picked < list.length;
   }
-  // Farming picks every badge itself, so the tick boxes are locked while it's on.
+  // Auto select picks every badge itself, so the tick boxes are locked while it's on.
   const auto = !!status?.badges_auto;
   all.disabled = !list.length || pickingAll || auto;
   all.closest("label").dataset.tip = auto ? "Picked automatically" : "Pick every badge";
@@ -1901,7 +1901,7 @@ $("badges-auto").addEventListener("change", async (ev) => {
   try {
     await send("PUT", "api/settings/badges-auto", { auto: ev.target.checked });
     status.badges_auto = ev.target.checked;
-    toast(ev.target.checked ? "Farming badges automatically" : "Stopped farming badges automatically");
+    toast(ev.target.checked ? "Auto selecting badges" : "Stopped auto selecting badges");
   } catch (e) {
     ev.target.checked = !ev.target.checked;
     showError(e.message);
@@ -1993,7 +1993,7 @@ function renderEarned() {
   // Newest first.
   $("earned-list").innerHTML = earned.length
     ? [...earned].reverse().map(earnedHtml).join("")
-    : `<li class="empty">Badges show up here once they're earned. Pick some under Badge drops, or turn on farming.</li>`;
+    : `<li class="empty">Badges show up here once they're earned. Pick some under Badge drops, or turn on Auto select badges.</li>`;
   if (!$("earned-pop").hidden) placeEarnedPop();
 }
 
@@ -2008,7 +2008,7 @@ function placeEarnedPop() {
 function earnedHtml(e) {
   const at = new Date(e.earned_at * 1000);
   const image = /^https:\/\//.test(e.image) ? e.image : "";
-  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`, e.auto ? "farmed" : "picked"]
+  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`, e.auto ? "auto selected" : "picked by you"]
     .filter(Boolean).join(" · ");
   return `<li>
     ${image ? `<img src="${esc(image)}" alt="" width="36" height="36" loading="lazy">` : ICON.award}
