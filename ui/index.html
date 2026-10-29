@@ -324,7 +324,7 @@
   .earned-btn svg.i { width: 13px; height: 13px; }
   .earned-btn .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   html.modal-open { overflow: hidden; }
-  .dialog { width: min(720px, calc(100vw - 32px)); max-width: none; max-height: min(640px, calc(100dvh - 32px)); padding: 0;
+  .dialog { width: min(720px, calc(100vw - 32px)); max-width: none; max-height: min(800px, calc(100dvh - 32px)); padding: 0;
     color: var(--text); background: var(--elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
     box-shadow: var(--shadow-dialog); overscroll-behavior: contain; }
   .dialog[open] { display: flex; flex-direction: column; animation: dialog-in var(--base) var(--ease); }
@@ -352,6 +352,9 @@
   .earned-list.list .badge-text { flex: 1; }
   .earned-list.list img, .earned-list.list svg.i { width: 36px; height: 36px; }
   .earned-list.list svg.i { padding: 6px; }
+  /* The grid view grows with its badges, one 148px column each (plus 8px gaps, 12px padding and the
+     border), from 720px up to 1200px or the window. */
+  .dialog.grid-view { width: clamp(min(720px, calc(100vw - 32px)), calc(var(--cards, 1) * 156px + 18px), min(1200px, calc(100vw - 32px))); }
   .earned-list.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; padding: 12px; }
   .earned-list.grid li { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 10px 10px; text-align: center;
     background: var(--elevated-2); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -2008,11 +2011,11 @@ $("badges").addEventListener("click", async (ev) => {
 });
 
 // Earned this session: the count on a button next to the title; it opens a dialog with every
-// badge, as a grid or a list (remembered per browser).
+// badge, as a list (the default) or a grid, remembered per browser.
 
 let earnedShown = "";
-let earnedView = "grid";
-try { if (localStorage.getItem("earnedView") === "list") earnedView = "list"; } catch {}
+let earnedView = "list";
+try { if (localStorage.getItem("earnedView") === "grid") earnedView = "grid"; } catch {}
 
 function renderEarned() {
   const earned = status?.earned_badges ?? [];
@@ -2034,6 +2037,8 @@ function renderEarned() {
   for (const b of $("earned-dialog").querySelectorAll("[data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === earnedView));
   const list = $("earned-list");
   list.className = "earned-list " + earnedView;
+  $("earned-dialog").classList.toggle("grid-view", earnedView === "grid");
+  $("earned-dialog").style.setProperty("--cards", Math.max(1, earned.length));
   // Newest first.
   list.innerHTML = earned.length
     ? [...earned].reverse().map(earnedHtml).join("")

@@ -61,7 +61,7 @@ the web UI:
   that are live, most viewers first; they're removed again once the badge is earned, the campaign ends or you
   untick it. Channels you added yourself are never removed this way.
   Earned badges leave the list. The button next to the title counts the badges earned since the miner started;
-  click it to see them all in a window, as a grid or a list, with each one's art, game, the channel it was earned on (a link, kept by channel id through renames), the watch time it took
+  click it to see them all in a window, as a list or a grid (which widens with the badges on large screens), with each one's art, game, the channel it was earned on (a link, kept by channel id through renames), the watch time it took
   and when.
 
 With `followers = true`, new follows are added to the end of the list on each start and unfollowed channels
