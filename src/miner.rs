@@ -32,7 +32,7 @@ mod drops;
 mod messages;
 mod predictions;
 
-pub use badges::BadgeView;
+pub use badges::{BadgeView, EarnedBadge};
 pub use predictions::{PredictionSettings, PredictionsView};
 #[cfg(test)]
 pub(crate) use predictions::{pick as pick_outcome, Outcome, Strategy};

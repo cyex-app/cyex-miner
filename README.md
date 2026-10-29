@@ -60,6 +60,8 @@ the web UI:
   second slot is used again once it's earned or no badge channel is live. **Add channels** adds up to 5 eligible channels
   that are live, most viewers first; they're removed again once the badge is earned, the campaign ends or you
   untick it. Channels you added yourself are never removed this way.
+  Earned badges leave the list. The button next to the title counts the badges earned since the miner started;
+  click it for each one's art, game, the channel it was earned on and when.
 
 With `followers = true`, new follows are added to the end of the list on each start and unfollowed channels
 are dropped. Per-channel overrides imported from the config (`follow_raid`, `chat`, ...) are kept in the

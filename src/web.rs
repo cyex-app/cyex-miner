@@ -29,7 +29,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::{
     auth::LoginPrompt,
     entities::streamer::{HistoryEntry, Source, Streamer},
-    miner::{BadgeView, LogEvent, Miner, PredictionSettings, PredictionsView},
+    miner::{BadgeView, EarnedBadge, LogEvent, Miner, PredictionSettings, PredictionsView},
     priority::Priority,
     twitch::ChannelHit,
     utils::random_alnum,
@@ -245,6 +245,8 @@ struct Status {
     predictions: Option<PredictionsView>,
     /// Running badge drops that need only watch time.
     badges: Vec<BadgeView>,
+    /// Badges earned since the miner started, oldest first.
+    earned_badges: Vec<EarnedBadge>,
     /// Badges are picked, and channels added for them, automatically.
     badges_auto: bool,
     /// Only in `/api/status`; the live stream sends events separately.
@@ -266,6 +268,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             predictions: Some(miner.predictions()),
             streamers: miner.streamers().iter().map(|s| StreamerView::new(s)).collect(),
             badges: miner.badges(),
+            earned_badges: miner.earned_badges(),
             badges_auto: miner.auto_badges(),
             events: with_events.then(|| miner.events()),
         },
@@ -280,6 +283,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             predictions: None,
             streamers: Vec::new(),
             badges: Vec::new(),
+            earned_badges: Vec::new(),
             badges_auto: false,
             events: with_events.then(Vec::new),
         },

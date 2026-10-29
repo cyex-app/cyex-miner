@@ -53,6 +53,21 @@ pub struct BadgeView {
     pub added_channels: usize,
 }
 
+/// A badge earned while the miner runs, for the web UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct EarnedBadge {
+    pub campaign_id: String,
+    pub name: String,
+    pub image: String,
+    pub game: String,
+    pub minutes_required: i64,
+    pub earned_at: f64,
+    /// The channel being watched for it when it was earned.
+    pub channel: Option<String>,
+    /// Picked by badge farming rather than by hand.
+    pub auto: bool,
+}
+
 #[derive(Debug, Clone)]
 struct Badge {
     campaign_id: String,
@@ -68,6 +83,8 @@ struct Badge {
     minutes_watched: i64,
     ends_at: f64,
     earned: bool,
+    /// Seen not earned in the inventory, so earning it now happened this session.
+    seen_unearned: bool,
     /// Found in the drops inventory but not in the campaign list; kept until it ends.
     from_inventory: bool,
 }
@@ -95,6 +112,7 @@ impl Badge {
             minutes_watched: 0,
             ends_at: drop.end_at.min(c.end_at).timestamp() as f64,
             earned: false,
+            seen_unearned: false,
             from_inventory: false,
         })
     }
@@ -120,6 +138,8 @@ pub(super) struct BadgeState {
     auto: AtomicBool,
     /// When auto farming last tried to add channels, by campaign id.
     auto_tried: Mutex<HashMap<String, f64>>,
+    /// Badges earned since the miner started, oldest first.
+    earned: Mutex<Vec<EarnedBadge>>,
 }
 
 impl BadgeState {
@@ -132,6 +152,7 @@ impl BadgeState {
             events: RwLock::new(HashMap::new()),
             auto: AtomicBool::new(read(AUTO_KEY) == "1"),
             auto_tried: Mutex::new(HashMap::new()),
+            earned: Mutex::new(Vec::new()),
         }
     }
 }
@@ -159,6 +180,7 @@ pub(crate) fn parse_event_badges(resp: &Value, now: f64) -> HashMap<String, Stri
 }
 
 impl Miner {
+    /// The badges that can still be earned; earned ones are in `earned_badges`.
     pub fn badges(&self) -> Vec<BadgeView> {
         let picked = self.badges.picked.read().unwrap().clone();
         let added = self.badges.added.lock().unwrap().clone();
@@ -167,6 +189,7 @@ impl Miner {
             .read()
             .unwrap()
             .iter()
+            .filter(|b| !b.earned)
             .map(|b| BadgeView {
                 campaign_id: b.campaign_id.clone(),
                 name: b.name.clone(),
@@ -181,6 +204,10 @@ impl Miner {
                 added_channels: added.values().filter(|a| a.campaign_id == b.campaign_id).count(),
             })
             .collect()
+    }
+
+    pub fn earned_badges(&self) -> Vec<EarnedBadge> {
+        self.badges.earned.lock().unwrap().clone()
     }
 
     fn find_badge(&self, campaign_id: &str) -> Result<Badge> {
@@ -213,6 +240,7 @@ impl Miner {
                     if let Some(old) = badges.iter().find(|o| o.campaign_id == b.campaign_id) {
                         b.minutes_watched = old.minutes_watched;
                         b.earned = old.earned;
+                        b.seen_unearned = old.seen_unearned;
                     }
                     b
                 })
@@ -278,9 +306,23 @@ impl Miner {
         }
     }
 
-    /// Applies watch progress and earned badges from the drops inventory.
+    /// Applies watch progress and earned badges from the drops inventory. A badge seen not earned
+    /// before that is earned now goes in the session's earned list.
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
         self.add_inventory_badges(inventory);
+        // Which watched channel each campaign is earned on, for the earned list.
+        let watched: Vec<(String, HashSet<String>)> = self
+            .streamers()
+            .iter()
+            .filter_map(|s| {
+                let st = s.state();
+                let ids = st.stream.campaigns_ids.iter().cloned().collect();
+                (st.watching && st.badge_drop).then(|| (s.username.clone(), ids))
+            })
+            .collect();
+        let picked = self.badges.picked.read().unwrap().clone();
+        let auto = self.auto_badges();
+        let mut newly = Vec::new();
         let earned: HashSet<&str> = inventory["gameEventDrops"]
             .as_array()
             .into_iter()
@@ -302,8 +344,28 @@ impl Miner {
                 b.minutes_watched = p["currentMinutesWatched"].as_i64().unwrap_or(b.minutes_watched);
                 done |= p["isClaimed"].as_bool() == Some(true);
             }
+            if done && !b.earned && b.seen_unearned {
+                newly.push(EarnedBadge {
+                    campaign_id: b.campaign_id.clone(),
+                    name: b.name.clone(),
+                    image: b.image.clone(),
+                    game: b.game.clone(),
+                    minutes_required: b.minutes_required,
+                    earned_at: now(),
+                    channel: watched.iter().find(|(_, ids)| ids.contains(campaign_id)).map(|(login, _)| login.clone()),
+                    auto: auto && picked.contains(campaign_id),
+                });
+            }
             b.earned |= done;
+            b.seen_unearned |= !done;
         }
+        for e in &newly {
+            match &e.channel {
+                Some(channel) => self.event(format!("Earned the {} badge watching {channel}", e.name)),
+                None => self.event(format!("Earned the {} badge", e.name)),
+            }
+        }
+        self.badges.earned.lock().unwrap().extend(newly);
     }
 
     /// Marks the live channels that can earn a picked badge right now, for the BADGES rule.

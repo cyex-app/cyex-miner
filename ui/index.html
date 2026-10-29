@@ -307,7 +307,6 @@
   .badge-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
   .badge-row:last-child { border-bottom: 0; }
   .badge-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
-  .badge-row.earned .badge-pick { cursor: default; }
   .badge-pick img, .badge-pick svg.i { width: 28px; height: 28px; flex-shrink: 0; border-radius: var(--radius-sm); }
   .badge-pick svg.i { padding: 4px; color: var(--dim); }
   .badge-text { flex: 1; min-width: 0; }
@@ -316,9 +315,27 @@
   .progress .track { flex: 1; height: 4px; background: var(--neutral-chip); border-radius: var(--radius-sm); overflow: hidden; }
   .progress .fill { display: block; height: 100%; background: var(--accent); }
   .progress .mono { color: var(--dim); font-size: .72rem; font-weight: 600; white-space: nowrap; }
-  .chip.earned, .chip.won { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .chip.won { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
   .chip.lost { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
   .badges .empty { padding: 24px 16px; }
+  /* Earned this session: a button next to the title and a popover with the details. */
+  .card > header h2 .earned-btn { margin: -6px 0 -6px 10px; padding: 4px 9px; gap: 6px; font-size: .74rem; vertical-align: middle; }
+  .earned-btn svg.i { width: 13px; height: 13px; }
+  .earned-btn .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .pop.earned-pop { width: min(340px, calc(100vw - 16px)); max-width: none; padding: 0; }
+  .earned-pop .pop-head { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .earned-pop .pop-head b { display: block; font-size: .8rem; }
+  .earned-pop .pop-head span { display: block; color: var(--dim); font-size: var(--text-hint); }
+  .earned-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .earned-list li { display: flex; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .earned-list li:last-child { border-bottom: 0; }
+  .earned-list img, .earned-list svg.i { width: 36px; height: 36px; flex-shrink: 0; border-radius: var(--radius-sm); }
+  .earned-list svg.i { padding: 6px; color: var(--dim); }
+  .earned-list .badge-text > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .earned-list .name { font-weight: 600; font-size: .84rem; }
+  .earned-list .meta { color: var(--dim); font-size: var(--text-hint); }
+  .earned-list time { color: var(--muted); font: 600 .72rem/1.6 var(--font-mono); font-variant-numeric: tabular-nums; }
+  .earned-list li.empty { display: block; padding: 20px 12px; text-align: center; color: var(--dim); font-size: var(--text-sub); }
 
   /* Activity log */
   #events { height: 360px; overflow-y: auto; overscroll-behavior: contain; font-size: .8rem; }
@@ -508,8 +525,10 @@
         </section>
 
         <section class="card">
-          <header><h2>Badge drops<span class="dim" id="badge-count"></span></h2>
-            <label class="select-all" data-tip="Pick every badge" data-hint="Badges already earned are left out">
+          <header><h2>Badge drops<span class="dim" id="badge-count"></span><button type="button" class="btn secondary small earned-btn"
+              id="earned-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="earned-pop" data-tip="Earned this session"
+              data-hint="Click for when and where each one was earned"></button></h2>
+            <label class="select-all" data-tip="Pick every badge" data-hint="Earned badges leave the list">
               <input type="checkbox" id="badges-all"><span>All</span></label>
           </header>
           <label class="switch-row badge-auto">
@@ -620,6 +639,11 @@
     <button type="button" class="btn ghost small" id="remove-cancel">Cancel</button>
     <button type="button" class="btn danger small" id="remove-confirm">Remove</button>
   </div>
+</div>
+
+<div class="pop earned-pop" id="earned-pop" role="dialog" aria-labelledby="earned-pop-title" tabindex="-1" hidden>
+  <div class="pop-head"><b id="earned-pop-title">Earned this session</b><span id="earned-pop-sum"></span></div>
+  <ul class="earned-list" id="earned-list"></ul>
 </div>
 
 <script>
@@ -1322,17 +1346,22 @@ $("rows").addEventListener("click", async (ev) => {
 
 let confirmRemove = null;  // id of the channel the bubble asks about
 
-function placeRemovePop() {
-  const btn = findButton([confirmRemove, "remove"]);
-  if (!btn) return closeRemovePop();
-  const pop = $("remove-pop");
+// Puts a popover below its button (above when there's no room), its arrow at the button. `start`
+// lines it up with the button's left edge, otherwise with its right edge.
+function placePop(pop, btn, start = false) {
   const a = btn.getBoundingClientRect(), p = pop.getBoundingClientRect();
-  const left = Math.min(Math.max(8, a.right + 6 - p.width), innerWidth - p.width - 8);
+  const left = Math.min(Math.max(8, start ? a.left - 6 : a.right + 6 - p.width), innerWidth - p.width - 8);
   const below = a.bottom + 10 + p.height < innerHeight - 8;
   pop.classList.toggle("above", !below);
   pop.style.left = left + "px";
   pop.style.top = (below ? a.bottom + 10 : a.top - 10 - p.height) + "px";
   pop.style.setProperty("--arrow-x", a.left + a.width / 2 - left - 5 + "px");
+}
+
+function placeRemovePop() {
+  const btn = findButton([confirmRemove, "remove"]);
+  if (!btn) return closeRemovePop();
+  placePop($("remove-pop"), btn);
 }
 
 function openRemovePop(id) {
@@ -1800,38 +1829,39 @@ function badgeHtml(b) {
   const watched = Math.min(b.minutes_watched, b.minutes_required);
   // Badge art comes from Twitch's CDN; anything that isn't https gets the plain icon.
   const image = /^https:\/\//.test(b.image) ? b.image : "";
-  return `<li class="badge-row ${b.earned ? "earned" : ""}" data-id="${esc(b.campaign_id)}">
+  return `<li class="badge-row" data-id="${esc(b.campaign_id)}">
     <label class="badge-pick">
-      <input type="checkbox" ${b.picked && !b.earned ? "checked" : ""} ${b.earned || status?.badges_auto ? "disabled" : ""}
+      <input type="checkbox" ${b.picked ? "checked" : ""} ${status?.badges_auto ? "disabled" : ""}
         aria-label="Pick ${esc(b.name)}">
       ${image ? `<img src="${esc(image)}" alt="" width="28" height="28" loading="lazy">` : ICON.award}
       <span class="badge-text">
         <span class="rule-name" title="${esc(b.name)}">${esc(b.name)}</span>
         <span class="rule-desc" title="${esc(meta)}">${esc(meta)}</span>
-        <span class="progress"><span class="track"><span class="fill" style="width:${b.earned ? 100 : pct}%"></span></span>
-          ${b.earned ? '<span class="chip earned">earned</span>' : `<span class="mono">${fmt(watched)}/${fmt(b.minutes_required)} min${added}</span>`}</span>
+        <span class="progress"><span class="track"><span class="fill" style="width:${pct}%"></span></span>
+          <span class="mono">${fmt(watched)}/${fmt(b.minutes_required)} min${added}</span></span>
       </span>
     </label>
-    ${b.earned ? "" : `<button type="button" class="btn secondary small add-ch" data-tip="Add channels" aria-label="Add channels for ${esc(b.name)}"
-      data-hint="Adds up to 5 eligible live channels, most viewers first. They're removed again once the badge is earned">Add</button>`}
+    <button type="button" class="btn secondary small add-ch" data-tip="Add channels" aria-label="Add channels for ${esc(b.name)}"
+      data-hint="Adds up to 5 eligible live channels, most viewers first. They're removed again once the badge is earned">Add</button>
   </li>`;
 }
 
 function renderBadges() {
-  // The server refreshes campaigns every 30 minutes; don't show one that has ended meanwhile.
+  renderEarned();
+  // The server leaves earned badges out and refreshes campaigns every 30 minutes; don't show one
+  // that has ended meanwhile.
   const list = (status?.badges ?? []).filter((b) => b.ends_at > Date.now() / 1000)
-    .sort((a, b) => a.earned - b.earned || a.ends_at - b.ends_at);
-  // All: ticked when every badge that can still be earned is picked, a dash when only some are.
-  const pickable = list.filter((b) => !b.earned);
-  const picked = pickable.filter((b) => b.picked).length;
+    .sort((a, b) => a.ends_at - b.ends_at);
+  // All: ticked when every badge is picked, a dash when only some are.
+  const picked = list.filter((b) => b.picked).length;
   const all = $("badges-all");
   if (!pickingAll) {
-    all.checked = pickable.length > 0 && picked === pickable.length;
-    all.indeterminate = picked > 0 && picked < pickable.length;
+    all.checked = list.length > 0 && picked === list.length;
+    all.indeterminate = picked > 0 && picked < list.length;
   }
   // Farming picks every badge itself, so the tick boxes are locked while it's on.
   const auto = !!status?.badges_auto;
-  all.disabled = !pickable.length || pickingAll || auto;
+  all.disabled = !list.length || pickingAll || auto;
   all.closest("label").dataset.tip = auto ? "Picked automatically" : "Pick every badge";
   if (!autoSaving) $("badges-auto").checked = auto;
   const key = JSON.stringify([list, auto]);
@@ -1882,11 +1912,11 @@ $("badges-auto").addEventListener("change", async (ev) => {
   }
 });
 
-// All picks (or unpicks) every badge not earned yet, one request per badge that changes.
+// All picks (or unpicks) every badge, one request per badge that changes.
 let pickingAll = false;
 $("badges-all").addEventListener("change", async (ev) => {
   const picked = ev.target.checked;
-  const ids = (status?.badges ?? []).filter((b) => !b.earned && b.picked !== picked && b.ends_at > Date.now() / 1000)
+  const ids = (status?.badges ?? []).filter((b) => b.picked !== picked && b.ends_at > Date.now() / 1000)
     .map((b) => b.campaign_id);
   pickingAll = true;
   ev.target.disabled = true;
@@ -1938,6 +1968,94 @@ $("badges").addEventListener("click", async (ev) => {
     refresh();
   }
 });
+
+// Earned this session: the count on a button next to the title, the details in a popover.
+
+let earnedShown = "";
+
+function renderEarned() {
+  const earned = status?.earned_badges ?? [];
+  const btn = $("earned-btn");
+  const label = `${fmt(earned.length)} earned`;
+  if (btn.dataset.label !== label) {
+    btn.dataset.label = label;
+    btn.innerHTML = `${ICON.award}<span class="mono">${fmt(earned.length)}</span> earned`;
+    btn.setAttribute("aria-label", `${label} this session`);
+  }
+  const key = JSON.stringify([earned, status?.started_at]);
+  if (key === earnedShown) return;
+  earnedShown = key;
+  const minutes = earned.reduce((m, e) => m + e.minutes_required, 0);
+  const since = status?.started_at ? "since " + fmtDate(new Date(status.started_at * 1000)) : "this session";
+  $("earned-pop-sum").textContent = earned.length
+    ? `${fmt(earned.length)} ${earned.length === 1 ? "badge" : "badges"} ${since}, ${fmt(minutes)} min of watch time`
+    : `None yet ${since}`;
+  // Newest first.
+  $("earned-list").innerHTML = earned.length
+    ? [...earned].reverse().map(earnedHtml).join("")
+    : `<li class="empty">Badges show up here once they're earned. Pick some under Badge drops, or turn on farming.</li>`;
+  if (!$("earned-pop").hidden) placeEarnedPop();
+}
+
+// The list gets at most the room on the roomier side of the button, so the popover never leaves the window.
+function placeEarnedPop() {
+  const pop = $("earned-pop"), list = $("earned-list"), a = $("earned-btn").getBoundingClientRect();
+  const room = Math.max(innerHeight - a.bottom, a.top) - 18 - (pop.offsetHeight - list.offsetHeight);
+  list.style.maxHeight = Math.max(80, Math.min(320, room)) + "px";
+  placePop(pop, $("earned-btn"), true);
+}
+
+function earnedHtml(e) {
+  const at = new Date(e.earned_at * 1000);
+  const image = /^https:\/\//.test(e.image) ? e.image : "";
+  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`, e.auto ? "farmed" : "picked"]
+    .filter(Boolean).join(" · ");
+  return `<li>
+    ${image ? `<img src="${esc(image)}" alt="" width="36" height="36" loading="lazy">` : ICON.award}
+    <span class="badge-text">
+      <span class="name" title="${esc(e.name)}">${esc(e.name)}</span>
+      <span class="meta" title="${esc(e.game)}">${esc(e.game || "Any game")}</span>
+      <span class="meta" title="${esc(how)}">${esc(how)}</span>
+    </span>
+    <time datetime="${at.toISOString()}" title="${fmtDate(at)}">${fmtTime(at).slice(0, 5)}</time>
+  </li>`;
+}
+
+function openEarnedPop() {
+  hideTip();
+  const pop = $("earned-pop");
+  pop.hidden = false;
+  $("earned-btn").setAttribute("aria-expanded", "true");
+  placeEarnedPop();
+  pop.focus({ preventScroll: true });
+}
+
+function closeEarnedPop(returnFocus = false) {
+  if ($("earned-pop").hidden) return;
+  $("earned-pop").hidden = true;
+  $("earned-btn").setAttribute("aria-expanded", "false");
+  if (returnFocus) $("earned-btn").focus();
+}
+
+$("earned-btn").addEventListener("click", () => ($("earned-pop").hidden ? openEarnedPop() : closeEarnedPop()));
+$("earned-pop").addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeEarnedPop(true);
+});
+$("earned-list").addEventListener("error", (ev) => {
+  if (ev.target.matches?.("img")) ev.target.outerHTML = ICON.award;
+}, true);
+// Clicking anywhere else, or tabbing out, closes it.
+document.addEventListener("pointerdown", (ev) => {
+  if (!ev.target.closest("#earned-pop, #earned-btn")) closeEarnedPop();
+});
+$("earned-pop").addEventListener("focusout", (ev) => {
+  if (ev.relatedTarget && !ev.relatedTarget.closest("#earned-pop, #earned-btn")) closeEarnedPop();
+});
+addEventListener("scroll", (ev) => {
+  // Its own list scrolling doesn't move it.
+  if (!$("earned-pop").hidden && !$("earned-pop").contains(ev.target)) placeEarnedPop();
+}, true);
+addEventListener("resize", () => { if (!$("earned-pop").hidden) placeEarnedPop(); });
 
 // === Pause === //
 
