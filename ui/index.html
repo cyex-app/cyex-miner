@@ -2041,8 +2041,7 @@ function renderEarned() {
 function earnedHtml(e) {
   const at = new Date(e.earned_at * 1000);
   const image = /^https:\/\//.test(e.image) ? e.image : "";
-  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`, e.auto ? "auto selected" : "picked by you"]
-    .filter(Boolean).join(" · ");
+  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`].filter(Boolean).join(" · ");
   return `<li>
     ${image ? `<img src="${esc(image)}" alt="" width="56" height="56" loading="lazy">` : ICON.award}
     <span class="badge-text">
@@ -2050,7 +2049,7 @@ function earnedHtml(e) {
       <span class="meta" title="${esc(e.game)}">${esc(e.game || "Any game")}</span>
       <span class="meta" title="${esc(how)}">${esc(how)}</span>
     </span>
-    <time datetime="${at.toISOString()}" title="${fmtDate(at)}">${fmtDate(at).slice(at.toDateString() === new Date().toDateString() ? 11 : 5)}</time>
+    <time datetime="${at.toISOString()}" >${fmtDate(at)}</time>
   </li>`;
 }
 

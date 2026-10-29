@@ -64,8 +64,6 @@ pub struct EarnedBadge {
     pub earned_at: f64,
     /// The channel being watched for it when it was earned.
     pub channel: Option<String>,
-    /// Picked by auto select rather than by hand.
-    pub auto: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -320,8 +318,6 @@ impl Miner {
                 (st.watching && st.badge_drop).then(|| (s.username.clone(), ids))
             })
             .collect();
-        let picked = self.badges.picked.read().unwrap().clone();
-        let auto = self.auto_badges();
         let mut newly = Vec::new();
         let earned: HashSet<&str> = inventory["gameEventDrops"]
             .as_array()
@@ -353,7 +349,6 @@ impl Miner {
                     minutes_required: b.minutes_required,
                     earned_at: now(),
                     channel: watched.iter().find(|(_, ids)| ids.contains(campaign_id)).map(|(login, _)| login.clone()),
-                    auto: auto && picked.contains(campaign_id),
                 });
             }
             b.earned |= done;
