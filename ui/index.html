@@ -990,7 +990,12 @@ function render(st) {
     return;
   }
   $("login").hidden = true;
-  $("dashboard").hidden = false;
+  if ($("dashboard").hidden) {
+    $("dashboard").hidden = false;
+    // The server sends the log before the first status, while the dashboard is still hidden and
+    // the feed can't scroll; show the newest line now that it can.
+    scrollLogToEnd();
+  }
   $("user").innerHTML = (st.paused ? '<span class="chip paused">paused</span> ' : "") + '<span class="hide-sm">Mining as </span><b>' + esc(st.user) + "</b>";
   $("pause-btn").hidden = false;
   if (!$("pause-btn").disabled) renderPaused(st.paused);
@@ -1036,9 +1041,14 @@ function logLine(e) {
 
 // The server sends the recent lines on connect (`log-init`), then each new one (`log`).
 function setLog(events) {
-  const box = $("events");
   logCount = 0;
-  box.replaceChildren(...events.map(logLine));
+  $("events").replaceChildren(...events.map(logLine));
+  scrollLogToEnd();
+}
+
+// Newest lines are at the bottom; the feed opens there.
+function scrollLogToEnd() {
+  const box = $("events");
   box.scrollTop = box.scrollHeight;
 }
 
