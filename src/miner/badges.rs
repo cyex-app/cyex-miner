@@ -62,7 +62,9 @@ pub struct EarnedBadge {
     pub game: String,
     pub minutes_required: i64,
     pub earned_at: f64,
-    /// The channel being watched for it when it was earned.
+    /// The id of the channel being watched for it when it was earned.
+    pub channel_id: Option<String>,
+    /// That channel's login, current as long as the channel is in the list.
     pub channel: Option<String>,
 }
 
@@ -205,7 +207,14 @@ impl Miner {
     }
 
     pub fn earned_badges(&self) -> Vec<EarnedBadge> {
-        self.badges.earned.lock().unwrap().clone()
+        let mut earned = self.badges.earned.lock().unwrap().clone();
+        // Looked up by id, so a renamed channel shows (and links to) its new name.
+        for e in &mut earned {
+            if let Some(s) = e.channel_id.as_deref().and_then(|id| self.find_by_channel(id)) {
+                e.channel = Some(s.username.clone());
+            }
+        }
+        earned
     }
 
     fn find_badge(&self, campaign_id: &str) -> Result<Badge> {
@@ -309,13 +318,13 @@ impl Miner {
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
         self.add_inventory_badges(inventory);
         // Which watched channel each campaign is earned on, for the earned list.
-        let watched: Vec<(String, HashSet<String>)> = self
+        let watched: Vec<(String, String, HashSet<String>)> = self
             .streamers()
             .iter()
             .filter_map(|s| {
                 let st = s.state();
                 let ids = st.stream.campaigns_ids.iter().cloned().collect();
-                (st.watching && st.badge_drop).then(|| (s.username.clone(), ids))
+                (st.watching && st.badge_drop).then(|| (s.channel_id.clone(), s.username.clone(), ids))
             })
             .collect();
         let mut newly = Vec::new();
@@ -341,6 +350,7 @@ impl Miner {
                 done |= p["isClaimed"].as_bool() == Some(true);
             }
             if done && !b.earned && b.seen_unearned {
+                let channel = watched.iter().find(|(_, _, ids)| ids.contains(campaign_id));
                 newly.push(EarnedBadge {
                     campaign_id: b.campaign_id.clone(),
                     name: b.name.clone(),
@@ -348,7 +358,8 @@ impl Miner {
                     game: b.game.clone(),
                     minutes_required: b.minutes_required,
                     earned_at: now(),
-                    channel: watched.iter().find(|(_, ids)| ids.contains(campaign_id)).map(|(login, _)| login.clone()),
+                    channel_id: channel.map(|(id, _, _)| id.clone()),
+                    channel: channel.map(|(_, login, _)| login.clone()),
                 });
             }
             b.earned |= done;

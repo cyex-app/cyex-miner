@@ -360,6 +360,8 @@
   .earned-list.grid .badge-text { width: 100%; }
   .earned-list.grid .name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-height: 2.9em; line-height: 1.45; }
   .earned-list.grid .meta { white-space: normal; }
+  .earned-list .meta a { color: var(--muted); text-decoration: none; }
+  .earned-list .meta a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
   .earned-list.grid time { order: -1; align-self: flex-end; margin: -6px -2px -8px 0; }
   .earned-list li.empty { display: block; grid-column: 1 / -1; padding: 32px 16px; text-align: center; color: var(--dim);
     font-size: var(--text-sub); background: none; border: 0; }
@@ -2041,13 +2043,14 @@ function renderEarned() {
 function earnedHtml(e) {
   const at = new Date(e.earned_at * 1000);
   const image = /^https:\/\//.test(e.image) ? e.image : "";
-  const how = [e.channel ? "watching " + e.channel : "", `${fmt(e.minutes_required)} min`].filter(Boolean).join(" · ");
+  const channel = e.channel
+    ? `<a href="https://www.twitch.tv/${esc(e.channel)}" target="_blank" rel="noopener">${esc(e.channel)}</a> · ` : "";
   return `<li>
     ${image ? `<img src="${esc(image)}" alt="" width="56" height="56" loading="lazy">` : ICON.award}
     <span class="badge-text">
       <span class="name" title="${esc(e.name)}">${esc(e.name)}</span>
       <span class="meta" title="${esc(e.game)}">${esc(e.game || "Any game")}</span>
-      <span class="meta" title="${esc(how)}">${esc(how)}</span>
+      <span class="meta">${channel}${fmt(e.minutes_required)} min</span>
     </span>
     <time datetime="${at.toISOString()}" >${fmtDate(at)}</time>
   </li>`;
