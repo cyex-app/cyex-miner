@@ -198,7 +198,8 @@
   .bet-main .rule-name, .bet-main .rule-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bet .mono { color: var(--muted); font-size: .8rem; }
   .bets .none { padding: 8px 0 0; color: var(--dim); font-size: var(--text-hint); }
-  .bets-more { width: 100%; margin-top: 4px; }
+  .bets-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .bets-actions .btn { flex: 1; }
 
   /* Chips */
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
@@ -566,7 +567,10 @@
             <div>
               <span class="label">Recent bets</span>
               <ul class="bets" id="bets"></ul>
-              <button class="btn ghost small bets-more" id="bets-more" type="button" aria-controls="bets" hidden></button>
+              <div class="bets-actions" id="bets-actions" hidden>
+                <button class="btn ghost small" id="bets-more" type="button" aria-controls="bets"></button>
+                <button class="btn ghost small" id="bets-less" type="button" aria-controls="bets">Show fewer</button>
+              </div>
             </div>
           </div>
         </section>
@@ -1692,8 +1696,11 @@ let betsShown = "";
 let betsLimit = 5;         // bets on show
 
 $("bets-more").addEventListener("click", () => {
-  const total = status?.predictions?.bets.length ?? 0;
-  betsLimit = betsLimit >= total ? 5 : betsLimit === 5 ? 10 : betsLimit + 10;
+  betsLimit = betsLimit === 5 ? 10 : betsLimit + 10;
+  renderPredictions();
+});
+$("bets-less").addEventListener("click", () => {
+  betsLimit = 5;
   renderPredictions();
 });
 
@@ -1716,12 +1723,20 @@ function renderPredictions() {
   const key = JSON.stringify([p.bets, s.enabled, betsLimit]);
   if (key === betsShown) return;
   betsShown = key;
-  // 5 bets, then 10, 20, 30... on request; at the end the button collapses back to 5.
-  const more = $("bets-more");
+  // 5 bets, then 10, 20, 30... on request. Show fewer goes back to 5 at any point.
+  const more = $("bets-more"), less = $("bets-less");
+  // Read first: the browser drops focus from a button as soon as it's hidden.
+  const focused = document.activeElement;
   const next = Math.min(p.bets.length, betsLimit === 5 ? 10 : betsLimit + 10);
-  more.hidden = p.bets.length <= 5;
-  more.textContent = betsLimit >= p.bets.length ? "Show fewer" : `Show ${fmt(next - betsLimit)} more`;
+  $("bets-actions").hidden = p.bets.length <= 5;
+  more.hidden = betsLimit >= p.bets.length;
+  more.textContent = `Show ${fmt(next - betsLimit)} more`;
+  less.hidden = betsLimit <= 5;
   more.setAttribute("aria-expanded", String(betsLimit > 5));
+  less.setAttribute("aria-expanded", String(betsLimit > 5));
+  // A button that just disappeared would drop keyboard focus; hand it to the other one.
+  if (focused === more && more.hidden) less.focus();
+  if (focused === less && less.hidden) more.focus();
   $("bets").innerHTML = p.bets.length ? p.bets.slice(0, betsLimit).map((b) => {
     const [cls, label] = {
       won: ["won", "+" + fmt(b.net)],
