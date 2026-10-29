@@ -53,7 +53,9 @@ the web UI:
   un-blacklists it.
 - **Badge drops** lists the running drop campaigns that give a chat badge for watch time alone (badges that
   need a subscription or purchase aren't shown). Tick a badge to give its eligible live channels a watch slot
-  through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. Twitch counts
+  through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. **Farm badges
+  automatically** does all of it hands-off: every badge is picked as it starts, and when no channel in your list can
+  earn one, live eligible channels are added for it (retried every 30 minutes, at most 10 per badge). Twitch counts
   drop progress on one stream at a time, so while a picked badge can be earned only its channel is watched; the
   second slot is used again once it's earned or no badge channel is live. **Add channels** adds up to 5 eligible channels
   that are live, most viewers first; they're removed again once the badge is earned, the campaign ends or you

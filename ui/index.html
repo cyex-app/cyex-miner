@@ -303,6 +303,7 @@
      tall as the first 3 and scrolls on its own; while hovered, it keeps the page from scrolling. */
   .badges { list-style: none; margin: 0; padding: 0; }
   .badges.scrolls { overflow-y: auto; overscroll-behavior: contain; }
+  .switch-row.badge-auto { margin: 0; padding: 10px 12px 10px 16px; border-top: 0; border-bottom: 1px solid var(--border); }
   .badge-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
   .badge-row:last-child { border-bottom: 0; }
   .badge-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
@@ -511,6 +512,12 @@
             <label class="select-all" data-tip="Pick every badge" data-hint="Badges already earned are left out">
               <input type="checkbox" id="badges-all"><span>All</span></label>
           </header>
+          <label class="switch-row badge-auto">
+            <span><span class="rule-name">Farm badges automatically</span>
+              <span class="rule-desc">Picks every badge as it starts, and adds live channels for it when none of yours can earn it.
+                They're removed again once it's earned.</span></span>
+            <input type="checkbox" class="switch" role="switch" id="badges-auto">
+          </label>
           <ul class="badges" id="badges"></ul>
         </section>
 
@@ -1795,7 +1802,8 @@ function badgeHtml(b) {
   const image = /^https:\/\//.test(b.image) ? b.image : "";
   return `<li class="badge-row ${b.earned ? "earned" : ""}" data-id="${esc(b.campaign_id)}">
     <label class="badge-pick">
-      <input type="checkbox" ${b.picked && !b.earned ? "checked" : ""} ${b.earned ? "disabled" : ""} aria-label="Pick ${esc(b.name)}">
+      <input type="checkbox" ${b.picked && !b.earned ? "checked" : ""} ${b.earned || status?.badges_auto ? "disabled" : ""}
+        aria-label="Pick ${esc(b.name)}">
       ${image ? `<img src="${esc(image)}" alt="" width="28" height="28" loading="lazy">` : ICON.award}
       <span class="badge-text">
         <span class="rule-name" title="${esc(b.name)}">${esc(b.name)}</span>
@@ -1821,8 +1829,12 @@ function renderBadges() {
     all.checked = pickable.length > 0 && picked === pickable.length;
     all.indeterminate = picked > 0 && picked < pickable.length;
   }
-  all.disabled = !pickable.length || pickingAll;
-  const key = JSON.stringify(list);
+  // Farming picks every badge itself, so the tick boxes are locked while it's on.
+  const auto = !!status?.badges_auto;
+  all.disabled = !pickable.length || pickingAll || auto;
+  all.closest("label").dataset.tip = auto ? "Picked automatically" : "Pick every badge";
+  if (!autoSaving) $("badges-auto").checked = auto;
+  const key = JSON.stringify([list, auto]);
   if (key === badgesShown) return;
   badgesShown = key;
   $("badge-count").textContent = list.length ? fmt(list.length) : "";
@@ -1852,6 +1864,23 @@ function fitBadgeList() {
 }
 // Row heights change with the width (text wraps), so refit on resize.
 addEventListener("resize", fitBadgeList);
+
+let autoSaving = false;
+$("badges-auto").addEventListener("change", async (ev) => {
+  autoSaving = true;
+  try {
+    await send("PUT", "api/settings/badges-auto", { auto: ev.target.checked });
+    status.badges_auto = ev.target.checked;
+    toast(ev.target.checked ? "Farming badges automatically" : "Stopped farming badges automatically");
+  } catch (e) {
+    ev.target.checked = !ev.target.checked;
+    showError(e.message);
+  } finally {
+    autoSaving = false;
+    badgesShown = "";
+    refresh();
+  }
+});
 
 // All picks (or unpicks) every badge not earned yet, one request per badge that changes.
 let pickingAll = false;

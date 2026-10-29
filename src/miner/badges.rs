@@ -5,7 +5,10 @@
 use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
-    sync::{Mutex, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, RwLock,
+    },
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -27,6 +30,10 @@ const PICKED_KEY: &str = "badges";
 const ADDED_KEY: &str = "badge_channels";
 /// Channels added per quick add. Only 2 are watched at a time; the rest are backups.
 const QUICK_ADD: usize = 5;
+/// `meta` key for the "farm badges automatically" switch ("1" when on).
+const AUTO_KEY: &str = "badges_auto";
+/// How often auto farming tries to add channels for a badge none of the list can earn.
+const AUTO_ADD_RETRY_SECS: f64 = 30.0 * 60.0;
 
 /// A badge drop as the web UI shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +116,10 @@ pub(super) struct BadgeState {
     added: Mutex<HashMap<String, AddedChannel>>,
     /// Twitch's free event badges from `EVENT_BADGES_URL`: lowercase name -> image URL.
     events: RwLock<HashMap<String, String>>,
+    /// Farm badges automatically: pick every badge, and add channels for it when needed.
+    auto: AtomicBool,
+    /// When auto farming last tried to add channels, by campaign id.
+    auto_tried: Mutex<HashMap<String, f64>>,
 }
 
 impl BadgeState {
@@ -119,6 +130,8 @@ impl BadgeState {
             picked: RwLock::new(serde_json::from_str(&read(PICKED_KEY)).unwrap_or_default()),
             added: Mutex::new(serde_json::from_str(&read(ADDED_KEY)).unwrap_or_default()),
             events: RwLock::new(HashMap::new()),
+            auto: AtomicBool::new(read(AUTO_KEY) == "1"),
+            auto_tried: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -350,6 +363,96 @@ impl Miner {
         }
         self.update_badge_targets();
         Ok(())
+    }
+
+    pub fn auto_badges(&self) -> bool {
+        self.badges.auto.load(Ordering::Relaxed)
+    }
+
+    /// Turns badge farming on or off; saved in the database. Turning it on picks every badge right
+    /// away; channels are added by the campaigns loop (`run_auto_badges`).
+    pub fn set_auto_badges(&self, on: bool) -> Result<()> {
+        self.store
+            .set_meta(AUTO_KEY, if on { "1" } else { "0" })
+            .context("could not save the badge farming setting")?;
+        if self.badges.auto.swap(on, Ordering::Relaxed) == on {
+            return Ok(());
+        }
+        self.event(if on {
+            "Farming badges automatically: every badge drop is picked, and channels are added when needed"
+        } else {
+            "Stopped farming badges automatically"
+        });
+        if on {
+            self.badges.auto_tried.lock().unwrap().clear();
+            self.pick_all_badges();
+        }
+        Ok(())
+    }
+
+    /// Picks every badge not earned yet that isn't picked.
+    fn pick_all_badges(&self) {
+        let unpicked: Vec<String> = {
+            let picked = self.badges.picked.read().unwrap().clone();
+            self.badges
+                .badges
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|b| !b.earned && !picked.contains(&b.campaign_id))
+                .map(|b| b.campaign_id.clone())
+                .collect()
+        };
+        for id in unpicked {
+            if let Err(e) = self.set_badge_picked(&id, true) {
+                warn!("Could not pick badge {id}: {e:#}");
+            }
+        }
+    }
+
+    /// Badge farming, run every minute: picks new badges, and for a badge no channel in the list
+    /// can earn right now, adds live channels for it (at most every 30 minutes per badge).
+    pub(super) async fn run_auto_badges(&self) {
+        if !self.auto_badges() || self.paused() {
+            return;
+        }
+        self.pick_all_badges();
+        let now = now();
+        let needs_channels: Vec<(String, String)> = {
+            // Campaigns some live channel in the list can earn right now.
+            let covered: HashSet<String> = self
+                .streamers()
+                .iter()
+                .filter_map(|s| {
+                    let st = s.state();
+                    st.is_online.then(|| st.stream.campaigns_ids.clone())
+                })
+                .flatten()
+                .collect();
+            // Channels already added per campaign; past `2 * QUICK_ADD` no more are added.
+            let mut added: HashMap<String, usize> = HashMap::new();
+            for a in self.badges.added.lock().unwrap().values() {
+                *added.entry(a.campaign_id.clone()).or_default() += 1;
+            }
+            let tried = self.badges.auto_tried.lock().unwrap();
+            self.badges
+                .badges
+                .read()
+                .unwrap()
+                .iter()
+                .filter(|b| !b.earned && !covered.contains(&b.campaign_id))
+                .filter(|b| added.get(&b.campaign_id).copied().unwrap_or(0) < 2 * QUICK_ADD)
+                .filter(|b| tried.get(&b.campaign_id).map_or(true, |t| now - t > AUTO_ADD_RETRY_SECS))
+                .map(|b| (b.campaign_id.clone(), b.name.clone()))
+                .collect()
+        };
+        for (id, name) in needs_channels {
+            self.badges.auto_tried.lock().unwrap().insert(id.clone(), now);
+            // Each added channel is logged as it's added.
+            if let Err(e) = self.quick_add_badge(&id).await {
+                info!("No channels added for the {name} badge yet: {e:#}");
+            }
+        }
     }
 
     /// Adds up to `QUICK_ADD` live channels that can earn the badge, most viewers first, and picks it.

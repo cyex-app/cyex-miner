@@ -113,6 +113,7 @@ pub async fn serve(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
         .route("/api/settings/fill-slots", put(set_fill_slots))
         .route("/api/settings/predictions", put(set_predictions))
         .route("/api/badges/:id", put(set_badge_picked))
+        .route("/api/settings/badges-auto", put(set_auto_badges))
         .route("/api/badges/:id/channels", post(quick_add_badge))
         .route("/api/auth/regenerate", post(regenerate_token))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
@@ -244,6 +245,8 @@ struct Status {
     predictions: Option<PredictionsView>,
     /// Running badge drops that need only watch time.
     badges: Vec<BadgeView>,
+    /// Badges are picked, and channels added for them, automatically.
+    badges_auto: bool,
     /// Only in `/api/status`; the live stream sends events separately.
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<Vec<LogEvent>>,
@@ -263,6 +266,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             predictions: Some(miner.predictions()),
             streamers: miner.streamers().iter().map(|s| StreamerView::new(s)).collect(),
             badges: miner.badges(),
+            badges_auto: miner.auto_badges(),
             events: with_events.then(|| miner.events()),
         },
         None => Status {
@@ -276,6 +280,7 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             predictions: None,
             streamers: Vec::new(),
             badges: Vec::new(),
+            badges_auto: false,
             events: with_events.then(Vec::new),
         },
     }
@@ -512,4 +517,16 @@ async fn search_channels(Ready(miner): Ready, Query(params): Query<Search>) -> R
         .map(|hit| SearchHit { added: listed.contains(&hit.login), hit })
         .collect();
     Json(hits).into_response()
+}
+
+#[derive(Deserialize)]
+struct SetAutoBadges {
+    auto: bool,
+}
+
+async fn set_auto_badges(Ready(miner): Ready, Json(body): Json<SetAutoBadges>) -> Response {
+    match miner.set_auto_badges(body.auto) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
+    }
 }
