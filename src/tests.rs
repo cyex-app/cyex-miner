@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use serde_json::{json, Value};
 
@@ -8,6 +8,7 @@ use crate::{
         drops::Campaign,
         streamer::{ChatPresence, Source, Streamer, StreamerSettings},
     },
+    miner::parse_event_badges,
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
@@ -109,17 +110,34 @@ fn finds_watch_time_badge_drops() {
     let c = Campaign::from_json(&campaign_json(drop_json(30, 0, "BADGE"), allow)).unwrap();
     assert_eq!(c.game_slug, "game");
     assert_eq!(c.allowed_channels, [("1".to_string(), "lumen_fox".to_string())]);
-    let badge = c.watch_badge_drop().unwrap();
-    assert_eq!(badge.minutes_required, 30);
-    assert_eq!(badge.badge.as_ref().unwrap().benefit_id, "benefit");
+    let none = HashSet::new();
+    let (drop, badge) = c.watch_badge_drop(&none).unwrap();
+    assert_eq!(drop.minutes_required, 30);
+    assert_eq!(badge.benefit_id, "benefit");
 
     // A disabled allow list means any channel.
     let open = json!({ "isEnabled": false, "channels": [{ "id": "1", "name": "x" }] });
     assert!(Campaign::from_json(&campaign_json(drop_json(30, 0, "BADGE"), open)).unwrap().allowed_channels.is_empty());
     // Subscriptions, no watch time, or not a badge: not a watch-time badge.
     for drop in [drop_json(30, 1, "BADGE"), drop_json(0, 0, "BADGE"), drop_json(30, 0, "DIRECT_ENTITLEMENT")] {
-        assert!(Campaign::from_json(&campaign_json(drop, Value::Null)).unwrap().watch_badge_drop().is_none());
+        assert!(Campaign::from_json(&campaign_json(drop, Value::Null)).unwrap().watch_badge_drop(&none).is_none());
     }
+    // ...unless the reward is a known event badge.
+    let events: HashSet<String> = ["launch badge".to_string()].into();
+    let other = Campaign::from_json(&campaign_json(drop_json(30, 0, "DIRECT_ENTITLEMENT"), Value::Null)).unwrap();
+    assert_eq!(other.watch_badge_drop(&events).unwrap().1.name, "Launch badge");
+}
+
+#[test]
+fn parses_event_badges() {
+    let resp = json!({ "badges": [
+        { "name": "True Damage Fan", "imageUrl": "https://x/1", "endAt": "2099-01-01T00:00:00.000Z", "free": true },
+        { "name": "Worlds Supporter", "imageUrl": "https://x/2", "endAt": "2099-01-01T00:00:00.000Z", "free": false },
+        { "name": "Old", "imageUrl": "https://x/3", "endAt": "2020-01-01T00:00:00.000Z", "free": true },
+    ] });
+    let events = parse_event_badges(&resp, 1_800_000_000.0);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events["true damage fan"], "https://x/1");
 }
 
 #[test]

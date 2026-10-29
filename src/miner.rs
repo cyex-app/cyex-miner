@@ -32,6 +32,8 @@ mod drops;
 mod messages;
 
 pub use badges::BadgeView;
+#[cfg(test)]
+pub(crate) use badges::parse_event_badges;
 
 /// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
 const PRIORITY_KEY: &str = "priority";

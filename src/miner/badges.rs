@@ -61,18 +61,25 @@ struct Badge {
     minutes_watched: i64,
     ends_at: f64,
     earned: bool,
+    /// Found in the drops inventory but not in the campaign list; kept until it ends.
+    from_inventory: bool,
 }
 
 impl Badge {
-    fn from_campaign(c: &Campaign) -> Option<Self> {
-        let drop = c.watch_badge_drop()?;
-        let reward = drop.badge.as_ref()?;
+    /// `events`: Twitch's free event badges, lowercase name -> image URL.
+    fn from_campaign(c: &Campaign, events: &HashMap<String, String>) -> Option<Self> {
+        let names: HashSet<String> = events.keys().cloned().collect();
+        let (drop, reward) = c.watch_badge_drop(&names)?;
+        let image = match reward.image.as_str() {
+            "" => events.get(&reward.name.to_lowercase()).cloned().unwrap_or_default(),
+            image => image.to_string(),
+        };
         Some(Self {
             campaign_id: c.id.clone(),
             drop_id: drop.id.clone(),
             benefit_id: reward.benefit_id.clone(),
             name: if reward.name.is_empty() { drop.name.clone() } else { reward.name.clone() },
-            image: reward.image.clone(),
+            image,
             game_id: c.game_id.clone(),
             game: c.game_name.clone(),
             game_slug: c.game_slug.clone(),
@@ -81,6 +88,7 @@ impl Badge {
             minutes_watched: 0,
             ends_at: drop.end_at.min(c.end_at).timestamp() as f64,
             earned: false,
+            from_inventory: false,
         })
     }
 }
@@ -99,6 +107,8 @@ pub(super) struct BadgeState {
     picked: RwLock<HashSet<String>>,
     /// Quick-added channels by channel id.
     added: Mutex<HashMap<String, AddedChannel>>,
+    /// Twitch's free event badges from `EVENT_BADGES_URL`: lowercase name -> image URL.
+    events: RwLock<HashMap<String, String>>,
 }
 
 impl BadgeState {
@@ -108,8 +118,31 @@ impl BadgeState {
             badges: RwLock::new(Vec::new()),
             picked: RwLock::new(serde_json::from_str(&read(PICKED_KEY)).unwrap_or_default()),
             added: Mutex::new(serde_json::from_str(&read(ADDED_KEY)).unwrap_or_default()),
+            events: RwLock::new(HashMap::new()),
         }
     }
+}
+
+/// Twitch's free event badges (names, images, time windows), kept by catquery. Twitch doesn't
+/// always mark a drop's badge as one; a reward with one of these names is treated as a badge.
+const EVENT_BADGES_URL: &str = "https://api.catquery.com/eventBadges";
+
+/// The running, free event badges in a `EVENT_BADGES_URL` response: lowercase name -> image URL.
+pub(crate) fn parse_event_badges(resp: &Value, now: f64) -> HashMap<String, String> {
+    resp["badges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["free"].as_bool() == Some(true))
+        .filter(|b| {
+            let ends = b["endAt"].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+            ends.map_or(true, |e| e.timestamp() as f64 > now)
+        })
+        .filter_map(|b| {
+            let name = b["name"].as_str()?.trim().to_lowercase();
+            (!name.is_empty()).then(|| (name, b["imageUrl"].as_str().unwrap_or_default().to_string()))
+        })
+        .collect()
 }
 
 impl Miner {
@@ -156,11 +189,13 @@ impl Miner {
     /// Replaces the badge list from freshly loaded campaigns, keeping known progress. Picks of
     /// campaigns that are no longer running are dropped.
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
+        let events = self.badges.events.read().unwrap().clone();
+        let now = now();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
-            let fresh: Vec<Badge> = campaigns
+            let mut fresh: Vec<Badge> = campaigns
                 .iter()
-                .filter_map(Badge::from_campaign)
+                .filter_map(|c| Badge::from_campaign(c, &events))
                 .map(|mut b| {
                     if let Some(old) = badges.iter().find(|o| o.campaign_id == b.campaign_id) {
                         b.minutes_watched = old.minutes_watched;
@@ -169,9 +204,21 @@ impl Miner {
                     b
                 })
                 .collect();
+            let listed = fresh.len();
+            // Badges only the inventory knows stay until they end.
+            let from_inventory: Vec<Badge> = badges
+                .iter()
+                .filter(|b| b.from_inventory && b.ends_at > now && !fresh.iter().any(|f| f.campaign_id == b.campaign_id))
+                .cloned()
+                .collect();
+            fresh.extend(from_inventory);
             *badges = fresh;
             // Says where an empty Badge drops list comes from: no campaigns, or none giving a badge.
-            info!("{} drop campaigns running, {} with a badge for watch time", campaigns.len(), badges.len());
+            info!(
+                "{} drop campaigns running, {listed} with a badge for watch time ({} event badges known)",
+                campaigns.len(),
+                events.len()
+            );
             badges.iter().map(|b| b.campaign_id.clone()).collect()
         };
         let saved = {
@@ -187,8 +234,40 @@ impl Miner {
         }
     }
 
+    /// Loads Twitch's free event badges, used to recognise badge rewards by name. A failed load
+    /// keeps the last list.
+    pub(super) async fn refresh_event_badges(&self) {
+        let loaded = async {
+            let resp = self.twitch.http().get(EVENT_BADGES_URL).send().await?.error_for_status()?;
+            Ok::<_, anyhow::Error>(parse_event_badges(&resp.json::<Value>().await?, now()))
+        };
+        match loaded.await {
+            Ok(events) => *self.badges.events.write().unwrap() = events,
+            Err(e) => warn!("Could not load the event badge list: {e:#}"),
+        }
+    }
+
+    /// Adds badge campaigns the drops inventory has in progress but the campaign list doesn't.
+    fn add_inventory_badges(&self, inventory: &Value) {
+        let events = self.badges.events.read().unwrap().clone();
+        let now = now();
+        let mut badges = self.badges.badges.write().unwrap();
+        for json in inventory["dropCampaignsInProgress"].as_array().into_iter().flatten() {
+            let Some(campaign) = Campaign::from_json(json) else { continue };
+            if badges.iter().any(|b| b.campaign_id == campaign.id) {
+                continue;
+            }
+            if let Some(mut badge) = Badge::from_campaign(&campaign, &events).filter(|b| b.ends_at > now) {
+                info!("Found the {} badge drop in the drops inventory", badge.name);
+                badge.from_inventory = true;
+                badges.push(badge);
+            }
+        }
+    }
+
     /// Applies watch progress and earned badges from the drops inventory.
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
+        self.add_inventory_badges(inventory);
         let earned: HashSet<&str> = inventory["gameEventDrops"]
             .as_array()
             .into_iter()

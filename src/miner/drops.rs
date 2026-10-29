@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::Miner;
 use crate::{
@@ -53,6 +53,25 @@ impl Miner {
             .filter_map(|c| c["id"].as_str().map(str::to_string))
             .collect();
         let details = self.twitch.campaign_details(&ids).await?;
+        // What each campaign gives, to see why a badge does or doesn't show (RUST_LOG=points_miner=debug).
+        for c in &details {
+            let rewards: Vec<String> = c["timeBasedDrops"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|d| d["benefitEdges"].as_array().into_iter().flatten().map(move |e| (d, e)))
+                .map(|(d, e)| {
+                    format!(
+                        "{} ({}, {} min, {} subs)",
+                        e["benefit"]["name"].as_str().unwrap_or("?"),
+                        e["benefit"]["distributionType"].as_str().unwrap_or("?"),
+                        d["requiredMinutesWatched"],
+                        d["requiredSubs"]
+                    )
+                })
+                .collect();
+            debug!("Drop campaign {}: {}", c["name"].as_str().unwrap_or("?"), rewards.join(", "));
+        }
         Ok(details
             .iter()
             .filter_map(Campaign::from_json)
@@ -108,6 +127,7 @@ impl Miner {
                 if now() - last_refresh > 30.0 * 60.0 {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
+                    self.refresh_event_badges().await;
                     match self.fetch_campaigns().await {
                         Ok(c) => {
                             self.set_badge_campaigns(&c);

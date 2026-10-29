@@ -183,6 +183,11 @@ impl Twitch {
         cached.0.clone()
     }
 
+    /// The HTTP client, for the few requests that don't go to Twitch.
+    pub fn http(&self) -> &Client {
+        &self.http
+    }
+
     pub async fn gql(&self, body: &Value) -> Result<Value> {
         let resp = self
             .http

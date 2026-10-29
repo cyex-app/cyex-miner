@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -21,7 +23,10 @@ pub struct Drop {
     pub id: String,
     pub name: String,
     pub benefit: String,
+    /// The reward Twitch marks as a chat badge (`distributionType` BADGE), if any.
     pub badge: Option<BadgeReward>,
+    /// Every reward, for matching badges Twitch doesn't mark as one by name.
+    pub rewards: Vec<BadgeReward>,
     /// Subscriptions needed instead of (or on top of) watching.
     pub required_subs: i64,
     pub minutes_required: i64,
@@ -49,19 +54,23 @@ impl Drop {
             .unwrap_or_default();
         benefits.sort();
         benefits.dedup();
-        let badge = v["benefitEdges"].as_array().into_iter().flatten().find_map(|e| {
-            let b = &e["benefit"];
-            (b["distributionType"].as_str() == Some("BADGE")).then(|| BadgeReward {
-                benefit_id: b["id"].as_str().unwrap_or_default().to_string(),
-                name: b["name"].as_str().unwrap_or_default().to_string(),
-                image: b["imageAssetURL"].as_str().unwrap_or_default().to_string(),
-            })
-        });
+        let reward = |b: &Value| BadgeReward {
+            benefit_id: b["id"].as_str().unwrap_or_default().to_string(),
+            name: b["name"].as_str().unwrap_or_default().to_string(),
+            image: b["imageAssetURL"].as_str().unwrap_or_default().to_string(),
+        };
+        let edges = v["benefitEdges"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let badge = edges
+            .iter()
+            .map(|e| &e["benefit"])
+            .find(|b| b["distributionType"].as_str() == Some("BADGE"))
+            .map(reward);
         Some(Self {
             id: v["id"].as_str()?.to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
             benefit: benefits.join(", "),
             badge,
+            rewards: edges.iter().map(|e| reward(&e["benefit"])).collect(),
             required_subs: v["requiredSubs"].as_i64().unwrap_or(0),
             minutes_required: v["requiredMinutesWatched"].as_i64().unwrap_or(0),
             has_preconditions_met: None,
@@ -176,11 +185,20 @@ impl Campaign {
         self.start_at < now && now < self.end_at
     }
 
-    /// The drop that gives a badge for watching alone, if any.
-    pub fn watch_badge_drop(&self) -> Option<&Drop> {
+    /// The drop that gives a badge for watching alone, and that badge. A reward counts as a badge
+    /// when Twitch marks it as one, or when its name is in `event_badges` (lowercase names of
+    /// Twitch's event badges), for badges Twitch delivers some other way.
+    pub fn watch_badge_drop(&self, event_badges: &HashSet<String>) -> Option<(&Drop, &BadgeReward)> {
         self.drops
             .iter()
-            .find(|d| d.badge.is_some() && d.minutes_required > 0 && d.required_subs == 0)
+            .filter(|d| d.minutes_required > 0 && d.required_subs == 0)
+            .find_map(|d| {
+                let reward = d
+                    .badge
+                    .as_ref()
+                    .or_else(|| d.rewards.iter().find(|r| event_badges.contains(&r.name.to_lowercase())))?;
+                Some((d, reward))
+            })
     }
 
     /// Removes drops that are already claimed or outside their time window.
