@@ -8,7 +8,7 @@ use crate::{
         drops::Campaign,
         streamer::{ChatPresence, Source, Streamer, StreamerSettings},
     },
-    miner::parse_event_badges,
+    miner::{parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
@@ -126,6 +126,28 @@ fn finds_watch_time_badge_drops() {
     let events: HashSet<String> = ["launch badge".to_string()].into();
     let other = Campaign::from_json(&campaign_json(drop_json(30, 0, "DIRECT_ENTITLEMENT"), Value::Null)).unwrap();
     assert_eq!(other.watch_badge_drop(&events).unwrap().1.name, "Launch badge");
+}
+
+fn outcome(id: &str, users: i64, points: i64) -> Outcome {
+    Outcome { id: id.into(), title: id.into(), users, points }
+}
+
+#[test]
+fn prediction_strategies_pick_outcomes() {
+    let outcomes = [outcome("a", 10, 5_000), outcome("b", 40, 2_000), outcome("c", 0, 0), outcome("d", 40, 900)];
+    assert_eq!(pick_outcome(&outcomes, Strategy::Crowd), Some(1)); // most voters, first of a tie
+    assert_eq!(pick_outcome(&outcomes, Strategy::SmartMoney), Some(0));
+    assert_eq!(pick_outcome(&outcomes, Strategy::Underdog), Some(3)); // fewest points among voted ones
+    assert_eq!(pick_outcome(&[outcome("a", 0, 0)], Strategy::Crowd), None);
+}
+
+#[test]
+fn prediction_bets_respect_limits() {
+    let settings = PredictionSettings { percent: 5, max_points: 1_000, ..Default::default() };
+    assert_eq!(settings.bet(10_000), Some(500));
+    assert_eq!(settings.bet(1_000_000), Some(1_000));
+    assert_eq!(settings.bet(100), None); // 5 points is under Twitch's minimum of 10
+    assert!(!PredictionSettings::default().enabled);
 }
 
 #[test]

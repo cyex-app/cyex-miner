@@ -372,6 +372,25 @@ impl Twitch {
         Ok(())
     }
 
+    /// Bets `points` on an outcome of a prediction.
+    pub async fn make_prediction(&self, event_id: &str, outcome_id: &str, points: i64) -> Result<()> {
+        let resp = self
+            .gql(&MAKE_PREDICTION.with(json!({ "input": {
+                "eventID": event_id,
+                "outcomeID": outcome_id,
+                "points": points,
+                "transactionID": random_hex(16),
+            } })))
+            .await?;
+        if resp["data"].is_null() {
+            bail!("unexpected response: {resp}");
+        }
+        if let Some(code) = resp["data"]["makePrediction"]["error"]["code"].as_str() {
+            bail!("Twitch refused the bet ({code})");
+        }
+        Ok(())
+    }
+
     pub async fn join_raid(&self, raid_id: &str) -> Result<()> {
         self.gql(&JOIN_RAID.with(json!({ "input": { "raidID": raid_id } })))
             .await?;

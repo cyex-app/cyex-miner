@@ -72,6 +72,11 @@ pub const AVAILABLE_DROPS: Op = Op(
     "DropsHighlightService_AvailableDrops",
     "782dad0f032942260171d2d80a654f88bdd0c5a9dddc392e9bc92218a0f42d20",
 );
+/// Bets channel points on a prediction outcome.
+pub const MAKE_PREDICTION: Op = Op(
+    "MakePrediction",
+    "b44682ecc88358817009f20e69d75081b1e58825bb40aa53d5dbadcc17c881d8",
+);
 /// Live channels in a game's directory.
 pub const DIRECTORY_PAGE_GAME: Op = Op(
     "DirectoryPage_Game",

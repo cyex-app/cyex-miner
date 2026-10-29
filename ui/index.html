@@ -139,6 +139,46 @@
   input[type=checkbox]:indeterminate { background: var(--accent); border-color: var(--accent); }
   input[type=checkbox]:indeterminate::after { width: 8px; height: 0; margin: 0; border-width: 0 0 2px; transform: none; opacity: 1; }
 
+  /* Switch: a pill track with a knob; on shows the accent and a tick, so it reads as on in any theme. */
+  input[type=checkbox].switch { display: block; position: relative; width: 36px; height: 20px; border: 0;
+    border-radius: 999px; background: var(--border-strong);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent); transition: background-color var(--fast); }
+  input[type=checkbox].switch::before { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--text); transition: transform var(--fast) var(--ease), background-color var(--fast); }
+  input[type=checkbox].switch::after { position: absolute; top: 6px; left: 9px; width: 2px; height: 8px; margin: 0;
+    border: 0; background: var(--accent-ink); transform: none; }
+  input[type=checkbox].switch:checked { background: var(--accent); box-shadow: none; }
+  input[type=checkbox].switch:checked::before { transform: translateX(16px); background: var(--accent-ink); }
+  :root[data-theme="light"] input[type=checkbox].switch:not(:checked) { background: var(--dim); }
+  :root[data-theme="light"] input[type=checkbox].switch:not(:checked)::before { background: var(--surface); }
+  .switch-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .8rem; font-weight: 600; cursor: pointer; }
+  .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px;
+    padding-top: 12px; border-top: 1px solid var(--border); cursor: pointer; }
+  .switch-row:has(input:disabled) { cursor: default; }
+  .switch-row:has(input:disabled) .rule-name { color: var(--muted); }
+
+  /* Radio */
+  input[type=radio] { appearance: none; display: grid; place-items: center; width: 16px; height: 16px; margin: 2px 0 0;
+    flex-shrink: 0; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface); cursor: pointer; }
+  input[type=radio]::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); opacity: 0; }
+  input[type=radio]:checked { background: var(--accent); border-color: var(--accent); }
+  input[type=radio]:checked::after { opacity: 1; }
+
+  /* Predictions */
+  .options { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; min-width: 0; }
+  .options legend { padding: 0; margin-bottom: 8px; }
+  .option { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .amount-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); }
+  .field.num-field { width: 64px; padding: 6px 8px; font: 500 .85rem var(--font-mono); text-align: right; }
+  .field.num-field.wide { width: 96px; }
+  #pred-example { margin-top: 6px; }
+  .bets { list-style: none; margin: 8px 0 0; padding: 0; }
+  .bet { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .bet-main { flex: 1; min-width: 0; }
+  .bet-main .rule-name, .bet-main .rule-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bet .mono { color: var(--muted); font-size: .8rem; }
+  .bets .none { padding: 8px 0 0; color: var(--dim); font-size: var(--text-hint); }
+
   /* Chips */
   .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; border-radius: var(--radius);
     background: var(--neutral-chip); color: var(--muted); font-size: .62rem; font-weight: 700; letter-spacing: .06em;
@@ -250,7 +290,8 @@
   .progress .track { flex: 1; height: 4px; background: var(--neutral-chip); border-radius: var(--radius-sm); overflow: hidden; }
   .progress .fill { display: block; height: 100%; background: var(--accent); }
   .progress .mono { color: var(--dim); font-size: .72rem; font-weight: 600; white-space: nowrap; }
-  .chip.earned { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .chip.earned, .chip.won { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+  .chip.lost { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
   .badges .empty { padding: 24px 16px; }
 
   /* Activity log */
@@ -452,6 +493,49 @@
           <div class="body">
             <p class="hint" id="prio-hint" style="margin-bottom:12px"></p>
             <ol class="rules" id="rules"></ol>
+            <label class="switch-row" id="fill-row">
+              <span><span class="rule-name">Fill empty slots</span>
+                <span class="rule-desc">When the rules leave a slot free, watch the next live channel in the list.</span></span>
+              <input type="checkbox" class="switch" role="switch" id="fill-slots">
+            </label>
+          </div>
+        </section>
+
+        <section class="card" id="predictions">
+          <header>
+            <h2>Predictions</h2>
+            <label class="switch-label"><span id="pred-state">Off</span>
+              <input type="checkbox" class="switch" role="switch" id="pred-on" aria-label="Bet on predictions"></label>
+          </header>
+          <div class="body stack">
+            <p class="hint">Bets channel points on predictions in your channels, about 6 seconds before they close.
+              You can lose points.</p>
+            <fieldset class="options" id="pred-strategy">
+              <legend class="label">Bet on</legend>
+              <label class="option"><input type="radio" name="strategy" value="CROWD">
+                <span><span class="rule-name">The crowd's pick</span>
+                <span class="rule-desc">The outcome most people chose. Wins most often, pays the least.</span></span></label>
+              <label class="option"><input type="radio" name="strategy" value="SMART_MONEY">
+                <span><span class="rule-name">The smart money</span>
+                <span class="rule-desc">The outcome with the most points on it.</span></span></label>
+              <label class="option"><input type="radio" name="strategy" value="UNDERDOG">
+                <span><span class="rule-name">The underdog</span>
+                <span class="rule-desc">The outcome with the fewest points on it. Wins least often, pays the most.</span></span></label>
+            </fieldset>
+            <div>
+              <span class="label">Bet size</span>
+              <div class="amount-row">
+                <input class="field num-field" type="number" id="pred-percent" min="1" max="100" step="1" aria-label="Percent of the channel's points">
+                <span>% of the channel's points, at most</span>
+                <input class="field num-field wide" type="number" id="pred-max" min="10" step="10" aria-label="Most points per bet">
+                <span>points</span>
+              </div>
+              <p class="hint" id="pred-example"></p>
+            </div>
+            <div>
+              <span class="label">Recent bets</span>
+              <ul class="bets" id="bets"></ul>
+            </div>
           </div>
         </section>
 
@@ -527,10 +611,10 @@ const ICON = {
 const RULES = {
   BADGES: ["Picked badges", "Live channels that can earn a badge you picked under Badge drops."],
   PRIORITIZED: ["Starred channels", "Channels you starred."],
-  STREAK: ["Earn watch streaks", "Streams whose watch streak isn't earned yet (about 7 minutes per stream)."],
+  STREAK: ["Earn watch streaks", "Streams whose watch streak isn't earned yet: about 7 minutes for +300 to +450 points."],
   LONGEST_STREAK: ["Longest watch streak", "Channels with the longest current watch streak first."],
   DROPS: ["Drops in progress", "Streams with unclaimed drops for the game being played."],
-  SUBSCRIBED: ["Points multiplier", "Channels with a points bonus, e.g. from a subscription. Highest first."],
+  SUBSCRIBED: ["Points multiplier", "Channels where a sub or bonus earns you more per minute and chest, up to 2×. Highest first."],
   POINTS_DESCENDING: ["Most channel points", "Channels where you have the most points first."],
   POINTS_ASCENDING: ["Fewest channel points", "Channels where you have the fewest points first."],
   ORDER: ["List order", "Channels higher in the list first."],
@@ -920,6 +1004,8 @@ function render(st) {
   $("s-gained").classList.toggle("gain", gained > 0);
   renderUptime();
   renderBadges();
+  renderPredictions();
+  if (!fillSaving) $("fill-slots").checked = st.fill_slots ?? true;
   if (!draft) renderRules();
   renderRows();
   renderListHint();
@@ -1291,6 +1377,8 @@ function renderRules() {
 
 function applyPriorityLock() {
   const locked = !draft;
+  // "Fill empty slots" belongs to the watch priority, so the lock covers it too.
+  $("fill-slots").disabled = locked;
   const btn = $("prio-lock");
   btn.setAttribute("aria-pressed", String(locked));
   labelButton(btn, locked ? ICON.lock : ICON.unlock, locked ? "Priority locked" : "Priority unlocked",
@@ -1405,6 +1493,84 @@ function endRuleDrag(ev) {
 }
 rulesEl.addEventListener("pointerup", endRuleDrag);
 rulesEl.addEventListener("pointercancel", endRuleDrag);
+
+let fillSaving = false;
+$("fill-slots").addEventListener("change", async (ev) => {
+  fillSaving = true;
+  try {
+    await send("PUT", "api/settings/fill-slots", { fill: ev.target.checked });
+    status.fill_slots = ev.target.checked;
+  } catch (e) {
+    ev.target.checked = !ev.target.checked;
+    showError(e.message);
+  } finally {
+    fillSaving = false;
+  }
+});
+
+// === Predictions === //
+// The switch turns betting on and off right away; every other change is saved as it's made.
+
+let predSaving = false;
+let betsShown = "";
+
+function renderPredictions() {
+  const p = status?.predictions;
+  if (!p) return;
+  const s = p.settings;
+  if (!predSaving) {
+    $("pred-on").checked = s.enabled;
+    $("pred-state").textContent = s.enabled ? "On" : "Off";
+    for (const r of document.querySelectorAll('#pred-strategy input')) r.checked = r.value === s.strategy;
+    // Don't overwrite a number while it's being typed.
+    if (document.activeElement !== $("pred-percent")) $("pred-percent").value = s.percent;
+    if (document.activeElement !== $("pred-max")) $("pred-max").value = s.max_points;
+    const example = Math.min(Math.floor(10_000 * s.percent / 100), s.max_points);
+    $("pred-example").textContent = example >= 10
+      ? `With 10.000 points on a channel, that's a bet of ${fmt(example)}.`
+      : "With 10.000 points on a channel, that's under the 10 point minimum, so it won't bet.";
+  }
+  const key = JSON.stringify([p.bets, s.enabled]);
+  if (key === betsShown) return;
+  betsShown = key;
+  $("bets").innerHTML = p.bets.length ? p.bets.map((b) => {
+    const [cls, label] = {
+      won: ["won", "+" + fmt(b.net)],
+      lost: ["lost", "−" + fmt(-b.net)],
+      refunded: ["", "refunded"],
+    }[b.result] ?? ["", "open"];
+    return `<li class="bet">
+      <span class="bet-main"><span class="rule-name" title="${esc(b.outcome)}">${esc(b.outcome)}</span>
+        <span class="rule-desc" title="${esc(b.title)}">${esc(b.channel)} · ${esc(b.title)}</span></span>
+      <span class="mono">${fmt(b.points)}</span><span class="chip ${cls}">${esc(label)}</span>
+    </li>`;
+  }).join("") : `<li class="none">${s.enabled ? "No bets yet. They show here once a channel starts a prediction." : "Turn predictions on to start betting."}</li>`;
+}
+
+async function savePredictions(change) {
+  const next = { ...status.predictions.settings, ...change };
+  predSaving = true;
+  try {
+    await send("PUT", "api/settings/predictions", next);
+    status.predictions.settings = next;
+    if ("enabled" in change) toast(next.enabled ? "Predictions on" : "Predictions off");
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    predSaving = false;
+    betsShown = "";
+    renderPredictions();
+  }
+}
+
+$("pred-on").addEventListener("change", (ev) => savePredictions({ enabled: ev.target.checked }));
+$("pred-strategy").addEventListener("change", (ev) => savePredictions({ strategy: ev.target.value }));
+$("pred-percent").addEventListener("change", (ev) => {
+  savePredictions({ percent: Math.min(100, Math.max(1, Math.round(Number(ev.target.value)) || 1)) });
+});
+$("pred-max").addEventListener("change", (ev) => {
+  savePredictions({ max_points: Math.max(10, Math.round(Number(ev.target.value)) || 10) });
+});
 
 // === Badge drops === //
 // Drop campaigns that give a badge for watch time. Ticking one gives its channels a watch slot

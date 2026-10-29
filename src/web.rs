@@ -29,7 +29,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::{
     auth::LoginPrompt,
     entities::streamer::{HistoryEntry, Source, Streamer},
-    miner::{BadgeView, LogEvent, Miner},
+    miner::{BadgeView, LogEvent, Miner, PredictionSettings, PredictionsView},
     priority::Priority,
     utils::random_alnum,
 };
@@ -108,6 +108,8 @@ pub async fn serve(state: Arc<AppState>, host: &str, port: u16) -> Result<()> {
         .route("/api/streamers/:id/prioritize", put(set_prioritize))
         .route("/api/settings/priority", put(set_priority))
         .route("/api/settings/paused", put(set_paused))
+        .route("/api/settings/fill-slots", put(set_fill_slots))
+        .route("/api/settings/predictions", put(set_predictions))
         .route("/api/badges/:id", put(set_badge_picked))
         .route("/api/badges/:id/channels", post(quick_add_badge))
         .route("/api/auth/regenerate", post(regenerate_token))
@@ -233,8 +235,11 @@ struct Status {
     login_prompt: Option<LoginPrompt>,
     started_at: Option<f64>,
     priority: Vec<Priority>,
+    /// Whether slots the priority rules leave free go to live channels in list order.
+    fill_slots: bool,
     paused: bool,
     streamers: Vec<StreamerView>,
+    predictions: Option<PredictionsView>,
     /// Running badge drops that need only watch time.
     badges: Vec<BadgeView>,
     /// Only in `/api/status`; the live stream sends events separately.
@@ -251,7 +256,9 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             login_prompt,
             started_at: Some(miner.started_at),
             priority: miner.priority(),
+            fill_slots: miner.fill_slots(),
             paused: miner.paused(),
+            predictions: Some(miner.predictions()),
             streamers: miner.streamers().iter().map(|s| StreamerView::new(s)).collect(),
             badges: miner.badges(),
             events: with_events.then(|| miner.events()),
@@ -262,7 +269,9 @@ fn snapshot(state: &AppState, with_events: bool) -> Status {
             login_prompt,
             started_at: None,
             priority: Vec::new(),
+            fill_slots: true,
             paused: false,
+            predictions: None,
             streamers: Vec::new(),
             badges: Vec::new(),
             events: with_events.then(Vec::new),
@@ -453,6 +462,23 @@ async fn set_badge_picked(Ready(miner): Ready, Path(id): Path<String>, Json(body
 async fn quick_add_badge(Ready(miner): Ready, Path(id): Path<String>) -> Response {
     match miner.quick_add_badge(&id).await {
         Ok(added) => Json(json!({ "added": added })).into_response(),
+        Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetFillSlots {
+    fill: bool,
+}
+
+async fn set_fill_slots(Ready(miner): Ready, Json(body): Json<SetFillSlots>) -> Response {
+    miner.set_fill_slots(body.fill);
+    StatusCode::NO_CONTENT.into_response()
+}
+
+async fn set_predictions(Ready(miner): Ready, Json(body): Json<PredictionSettings>) -> Response {
+    match miner.set_prediction_settings(body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => error(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
 }

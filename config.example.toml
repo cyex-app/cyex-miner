@@ -25,7 +25,7 @@ claim_drops_startup = false
 #   POINTS_DESCENDING  most channel points first
 #   ORDER              the list order
 # Only read until the watch priority is first saved in the web UI, which then takes over.
-priority = ["BADGES", "PRIORITIZED", "STREAK", "DROPS", "ORDER"]
+priority = ["BADGES", "STREAK", "SUBSCRIBED", "PRIORITIZED", "DROPS", "ORDER"]
 
 # Also mine every channel you follow. New follows are added to the end of the list on each start.
 # Channels removed in the web UI are blacklisted so they don't come back; `blacklist` here is only

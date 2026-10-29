@@ -214,6 +214,9 @@ impl PubSubMessage {
             &data["claim"]["channel_id"],
             &data["channel_id"],
             &data["balance"]["channel_id"],
+            // Predictions: the channel's event, and this account's bet on it.
+            &data["event"]["channel_id"],
+            &data["prediction"]["channel_id"],
         ]
         .into_iter()
         .find_map(|v| v.as_str())

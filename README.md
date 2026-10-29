@@ -92,7 +92,15 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
   `POINTS_DESCENDING`, `ORDER`. Set them in the web UI: unlock **Watch priority**, tick the rules you want and drag them
   into order (mouse, touch, or the arrow keys on a handle). Changes are saved right away in the database and
   override `priority` in the config from then on. For example `STREAK`, `ORDER` keeps every watch streak and otherwise
-  watches the top 2 live channels of the list
+  watches the top 2 live channels of the list. The default puts the bonuses first: `BADGES`, `STREAK` (+300 to +450
+  for about 7 minutes), `SUBSCRIBED` (up to 2× points), then starred channels, drops and the list
+- **Fill empty slots** (on by default, under Watch priority): when the rules leave a slot free, the next live channel in
+  the list takes it, so no watch time goes unused
+- New streams get a watch slot about 10 seconds after going live
+- **Predictions** (off by default): bets channel points on predictions in your channels about 6 seconds before they
+  close. Turn it on or off with the switch on the Predictions card; it takes effect right away. Pick what to bet on
+  (the crowd's pick, the smart money or the underdog) and how much (a share of the channel's points, with a cap).
+  Recent bets and their results are listed on the card. You can lose points
 - Shows the current watch streak of each channel
 - Pause and resume mining from the web UI (**Pause** next to your name). While paused nothing is watched, chats are
   left and no bonuses, drops, moments or raids are claimed; the pause is saved in the database and survives restarts
@@ -102,4 +110,4 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
 - Can load the channels you follow
 - Prints a session report on Ctrl+C
 
-Not ported: predictions/betting, Telegram/Discord/webhook notifications, the analytics charts server, and community goals.
+Not ported: Telegram/Discord/webhook notifications, the analytics charts server, and community goals.

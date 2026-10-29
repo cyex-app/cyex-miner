@@ -30,8 +30,12 @@ use crate::{
 mod badges;
 mod drops;
 mod messages;
+mod predictions;
 
 pub use badges::BadgeView;
+pub use predictions::{PredictionSettings, PredictionsView};
+#[cfg(test)]
+pub(crate) use predictions::{pick as pick_outcome, Outcome, Strategy};
 #[cfg(test)]
 pub(crate) use badges::parse_event_badges;
 
@@ -41,6 +45,10 @@ const PRIORITY_KEY: &str = "priority";
 const LEGACY_STREAK_FIRST_KEY: &str = "streak_first";
 /// `meta` key for whether mining was paused in the web UI.
 const PAUSED_KEY: &str = "paused";
+/// `meta` key for the "fill empty slots" switch ("0" or "1"; on when missing).
+const FILL_SLOTS_KEY: &str = "fill_slots";
+/// Seconds a channel has to be live before it gets a watch slot, so its stream info is loaded.
+const STREAM_SETTLE_SECS: f64 = 10.0;
 /// Recent events kept for web UI clients that connect later.
 const MAX_EVENTS: usize = 50;
 
@@ -66,8 +74,11 @@ pub struct Miner {
     /// While paused nothing is watched, chats are left and nothing is claimed. PubSub stays
     /// connected so balances and live status stay current in the web UI.
     paused: AtomicBool,
+    /// Whether slots the priority rules leave free go to live channels in list order.
+    fill_slots: AtomicBool,
     pub started_at: f64,
     badges: badges::BadgeState,
+    predictions: predictions::PredictionState,
 }
 
 fn valid_login(name: &str) -> bool {
@@ -117,6 +128,7 @@ impl Miner {
         if paused {
             info!("Mining is paused, resume it in the web UI");
         }
+        let fill_slots = store.meta(FILL_SLOTS_KEY).ok().flatten().as_deref() != Some("0");
         Self {
             twitch,
             config,
@@ -128,8 +140,10 @@ impl Miner {
             adding: Mutex::new(HashSet::new()),
             priority: RwLock::new(priority),
             paused: AtomicBool::new(paused),
+            fill_slots: AtomicBool::new(fill_slots),
             started_at: now(),
             badges: badges::BadgeState::load(&store),
+            predictions: predictions::PredictionState::load(&store),
             store,
         }
     }
@@ -177,6 +191,10 @@ impl Miner {
         tokio::spawn(self.clone().dispatch_pubsub(pubsub_rx));
         self.pubsub
             .submit(format!("community-points-user-v1.{}", self.twitch.creds.user_id));
+        // Channel prediction topics are added as channels load; this is the bet results topic.
+        if self.prediction_settings().enabled {
+            self.subscribe_predictions(true);
+        }
 
         if self.config.claim_drops_startup {
             self.claim_all_drops_from_inventory().await;
@@ -543,6 +561,9 @@ impl Miner {
         for topic in channel_topics(streamer) {
             self.pubsub.submit(topic);
         }
+        if self.prediction_settings().enabled {
+            self.pubsub.submit(predictions::channel_topic(&streamer.channel_id));
+        }
         self.update_chat(streamer);
     }
 
@@ -575,6 +596,7 @@ impl Miner {
         for topic in channel_topics(&streamer) {
             self.pubsub.remove(&topic);
         }
+        self.pubsub.remove(&predictions::channel_topic(channel_id));
         self.chat.leave(&streamer.username);
         Ok(streamer)
     }
@@ -616,6 +638,25 @@ impl Miner {
 
     pub fn paused(&self) -> bool {
         self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn fill_slots(&self) -> bool {
+        self.fill_slots.load(Ordering::Relaxed)
+    }
+
+    /// Turns "fill empty slots" on or off; saved in the database.
+    pub fn set_fill_slots(&self, fill: bool) {
+        if self.fill_slots.swap(fill, Ordering::Relaxed) == fill {
+            return;
+        }
+        if let Err(e) = self.store.set_meta(FILL_SLOTS_KEY, if fill { "1" } else { "0" }) {
+            warn!("Could not save the fill empty slots setting: {e:#}");
+        }
+        self.event(if fill {
+            "Empty watch slots are filled with live channels in list order"
+        } else {
+            "Empty watch slots are left free"
+        });
     }
 
     pub fn set_paused(&self, paused: bool) {
@@ -810,7 +851,8 @@ impl Miner {
                 .iter()
                 .filter(|s| {
                     let st = s.state();
-                    st.is_online && (st.online_at == 0.0 || now - st.online_at > 30.0)
+                    // A few seconds after going live, so the stream info (broadcast id) is in.
+                    st.is_online && (st.online_at == 0.0 || now - st.online_at > STREAM_SETTLE_SECS)
                 })
                 .cloned()
                 .collect();
@@ -822,12 +864,18 @@ impl Miner {
                 }
             }
 
-            let watching = priority::select_watching(&candidates, &self.priority());
+            let mut rules = self.priority();
+            // Fill empty slots: whatever the rules leave free goes to live channels in list order.
+            if self.fill_slots() && !rules.contains(&Priority::Order) {
+                rules.push(Priority::Order);
+            }
+            let watching = priority::select_watching(&candidates, &rules);
             for s in &streamers {
                 s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));
             }
             if watching.is_empty() {
-                tokio::time::sleep(Duration::from_secs(20)).await;
+                // Nothing live: look again soon, so a channel that goes live is picked up quickly.
+                tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
 

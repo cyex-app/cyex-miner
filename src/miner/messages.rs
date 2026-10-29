@@ -1,4 +1,4 @@
-//! Handles PubSub messages: points, bonus chests, live status, raids and moments.
+//! Handles PubSub messages: points, bonus chests, live status, raids, moments and predictions.
 
 use std::{sync::Arc, time::Duration};
 
@@ -93,6 +93,9 @@ impl Miner {
                     }
                 });
             }
+            ("predictions-channel-v1", "event-created") => self.prediction_created(streamer, data),
+            ("predictions-channel-v1", "event-updated") => self.prediction_updated(data),
+            ("predictions-user-v1", "prediction-result") => self.prediction_result(&streamer, data),
             ("community-moments-channel-v1", "active") => {
                 let claim = streamer.settings.claim_moments && !self.paused();
                 if let (true, Some(moment_id)) = (claim, data["moment_id"].as_str()) {
