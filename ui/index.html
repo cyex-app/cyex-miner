@@ -334,7 +334,7 @@
   .dialog-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--border); }
   .dialog-head > div:first-child { flex: 1; min-width: 0; }
   .dialog-head h2 { margin: 0; font-size: 1.05rem; font-weight: 700; }
-  .dialog-head .sum { display: block; color: var(--dim); font-size: var(--text-hint); }
+  .dialog-head h2 .dim { margin-left: 6px; font-weight: 600; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
   .seg { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--border-strong); border-radius: var(--radius); }
   .seg .icon-btn { width: 28px; height: 26px; }
   .seg .icon-btn[aria-pressed="true"] { background: var(--accent-dim); color: var(--accent-text); }
@@ -675,7 +675,7 @@
 
 <dialog class="dialog" id="earned-dialog" aria-labelledby="earned-title">
   <header class="dialog-head">
-    <div><h2 id="earned-title">Earned this session</h2><span class="sum" id="earned-sum"></span></div>
+    <div><h2 id="earned-title">Earned this session<span class="dim" id="earned-count"></span></h2></div>
     <div class="seg" role="group" aria-label="View">
       <button type="button" class="icon-btn" data-view="grid" aria-label="Grid" data-tip="Grid"></button>
       <button type="button" class="icon-btn" data-view="list" aria-label="List" data-tip="List"></button>
@@ -2026,14 +2026,10 @@ function renderEarned() {
     btn.innerHTML = `${ICON.award}<span class="mono">${fmt(earned.length)}</span> earned`;
     btn.setAttribute("aria-label", `${label} this session`);
   }
-  const key = JSON.stringify([earned, status?.started_at, earnedView]);
+  const key = JSON.stringify([earned, earnedView]);
   if (key === earnedShown) return;
   earnedShown = key;
-  const minutes = earned.reduce((m, e) => m + e.minutes_required, 0);
-  const since = status?.started_at ? "since " + fmtDate(new Date(status.started_at * 1000)) : "this session";
-  $("earned-sum").textContent = earned.length
-    ? `${fmt(earned.length)} ${earned.length === 1 ? "badge" : "badges"} ${since}, ${fmt(minutes)} min of watch time`
-    : `None yet ${since}`;
+  $("earned-count").textContent = earned.length ? fmt(earned.length) : "";
   for (const b of $("earned-dialog").querySelectorAll("[data-view]")) b.setAttribute("aria-pressed", String(b.dataset.view === earnedView));
   const list = $("earned-list");
   list.className = "earned-list " + earnedView;
