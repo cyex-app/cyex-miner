@@ -299,7 +299,10 @@
   .select-all { display: flex; align-items: center; gap: 8px; padding-right: 4px; color: var(--muted);
     font-size: .8rem; font-weight: 600; cursor: pointer; }
   .select-all:has(input:disabled) { cursor: default; }
-  .badges { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+  /* Up to 3 badges show in full and the page scrolls past them as usual. With more, the list is as
+     tall as the first 3 and scrolls on its own; while hovered, it keeps the page from scrolling. */
+  .badges { list-style: none; margin: 0; padding: 0; }
+  .badges.scrolls { overflow-y: auto; overscroll-behavior: contain; }
   .badge-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border); }
   .badge-row:last-child { border-bottom: 0; }
   .badge-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; cursor: pointer; }
@@ -1825,13 +1828,30 @@ function renderBadges() {
   $("badge-count").textContent = list.length ? fmt(list.length) : "";
   if (!list.length) {
     $("badges").innerHTML = `<li class="empty">${ICON.award}No badges for watch time are running right now.</li>`;
+    fitBadgeList();
     return;
   }
   const focused = document.activeElement?.closest("#badges li");
   const focusedKind = document.activeElement?.matches("input") ? "input" : "button";
   $("badges").innerHTML = list.map(badgeHtml).join("");
+  fitBadgeList();
   if (focused) $("badges").querySelector(`li[data-id="${CSS.escape(focused.dataset.id)}"] ${focusedKind}`)?.focus();
 }
+
+const VISIBLE_BADGES = 3;
+
+// More than 3 badges: the list is as tall as the first 3 (rows vary with the text) and scrolls.
+function fitBadgeList() {
+  const list = $("badges");
+  const rows = [...list.children];
+  const scrolls = rows.length > VISIBLE_BADGES;
+  list.classList.toggle("scrolls", scrolls);
+  list.style.maxHeight = scrolls
+    ? rows.slice(0, VISIBLE_BADGES).reduce((h, r) => h + r.offsetHeight, 0) + "px"
+    : "";
+}
+// Row heights change with the width (text wraps), so refit on resize.
+addEventListener("resize", fitBadgeList);
 
 // All picks (or unpicks) every badge not earned yet, one request per badge that changes.
 let pickingAll = false;
