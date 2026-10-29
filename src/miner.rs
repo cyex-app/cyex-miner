@@ -783,18 +783,22 @@ impl Miner {
     fn apply_stream_info(&self, streamer: &Streamer, info: StreamInfo, campaigns_ids: Vec<String>) {
         let drops_game = info.game.clone().filter(|_| streamer.settings.claim_drops);
         let user_id = &self.twitch.creds.user_id;
-        let mut properties = json!({
+        // The same fields TwitchDropsMiner sends, whose drop progress is known to count.
+        let properties = json!({
             "channel_id": streamer.channel_id,
             "broadcast_id": info.broadcast_id,
+            "channel": streamer.username,
+            "game": drops_game.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
+            "game_id": drops_game.as_ref().map(|g| g.id.clone()).unwrap_or_default(),
+            "hidden": false,
+            "is_live": true,
+            "live": true,
+            "logged_in": true,
+            "minutes_logged": 1,
+            "muted": false,
             "player": "site",
             "user_id": user_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| user_id.clone().into()),
-            "live": true,
-            "channel": streamer.username,
         });
-        if let Some(game) = &drops_game {
-            properties["game"] = game.name.clone().into();
-            properties["game_id"] = game.id.clone().into();
-        }
 
         let mut st = streamer.state();
         st.stream
@@ -836,6 +840,8 @@ impl Miner {
     // === Minute watched === //
 
     async fn watch_loop(self: Arc<Self>) {
+        // The channel watched alone for a picked badge, see below.
+        let mut focus: Option<String> = None;
         loop {
             if self.paused() {
                 // Pausing mid-pass can leave flags set below; nothing is watched while paused.
@@ -869,7 +875,23 @@ impl Miner {
             if self.fill_slots() && !rules.contains(&Priority::Order) {
                 rules.push(Priority::Order);
             }
-            let watching = priority::select_watching(&candidates, &rules);
+            let mut watching = priority::select_watching(&candidates, &rules);
+            // Twitch counts drop progress on one stream at a time; switching between two every few
+            // seconds keeps restarting it. So while a picked badge can be earned, only its channel
+            // is watched (like TwitchDropsMiner), and the second slot waits.
+            let badge_channel = watching.iter().find(|s| s.state().badge_drop).cloned();
+            let focus_now = badge_channel.as_ref().map(|s| s.channel_id.clone());
+            if focus_now != focus {
+                match &badge_channel {
+                    Some(s) => self.event(format!("Watching only {s} while it can earn a picked badge")),
+                    None if focus.is_some() => self.event("Back to watching 2 channels"),
+                    None => {}
+                }
+                focus = focus_now;
+            }
+            if let Some(s) = badge_channel {
+                watching = vec![s];
+            }
             for s in &streamers {
                 s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));
             }
@@ -885,7 +907,12 @@ impl Miner {
                 }
                 let next = Instant::now() + Duration::from_secs_f64(20.0 / watching.len() as f64);
                 if let Err(e) = self.watch_once(s).await {
-                    debug!("Minute watched failed for {}: {e:#}", s.username);
+                    // Worth a warning while a badge depends on it.
+                    if focus.is_some() {
+                        warn!("Watching {} for a badge failed: {e:#}", s.username);
+                    } else {
+                        debug!("Minute watched failed for {}: {e:#}", s.username);
+                    }
                 }
                 tokio::time::sleep_until(next).await;
             }

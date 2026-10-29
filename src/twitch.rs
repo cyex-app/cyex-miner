@@ -555,8 +555,8 @@ impl Twitch {
         }
     }
 
-    /// Simulates one minute of watching: fetch the HLS playlist, touch the newest
-    /// segment of the lowest quality, then send the minute-watched analytics event.
+    /// Simulates watching: fetch the HLS playlist, touch every segment of the lowest quality, then
+    /// send the minute-watched analytics event. The segments advance drops, the event channel points.
     pub async fn watch(&self, login: &str, spade_url: &str, payload: &str) -> Result<bool> {
         let resp = self
             .gql(&PLAYBACK_ACCESS_TOKEN.with(json!({
@@ -588,26 +588,34 @@ impl Twitch {
         let master = master.text().await?;
         let variant_url = last_url_line(&master).context("no variant in master playlist")?;
 
+        // The CDN drops the connection right after the playlist; closing it ourselves is cleaner.
         let variant = self
             .http
             .get(variant_url)
             .header("User-Agent", CHROME_USER_AGENT)
+            .header("Connection", "close")
             .timeout(timeout)
             .send()
             .await?
             .text()
             .await?;
-        let segment_url = last_url_line(&variant).context("no segment in media playlist")?;
-
-        let head = self
-            .http
-            .head(segment_url)
-            .header("User-Agent", CHROME_USER_AGENT)
-            .timeout(timeout)
-            .send()
-            .await?;
-        if !head.status().is_success() {
-            bail!("segment HEAD returned {}", head.status());
+        // Touching every segment in the playlist (~15 of ~2s each) is what advances drops, as a
+        // player would; HEAD requests do it without downloading any video.
+        let segments: Vec<&str> = variant.lines().map(str::trim).filter(|l| l.starts_with("http")).collect();
+        if segments.is_empty() {
+            bail!("no segment in media playlist");
+        }
+        for segment_url in segments {
+            let head = self
+                .http
+                .head(segment_url)
+                .header("User-Agent", CHROME_USER_AGENT)
+                .timeout(timeout)
+                .send()
+                .await?;
+            if !head.status().is_success() {
+                bail!("segment HEAD returned {}", head.status());
+            }
         }
 
         let spade = self
