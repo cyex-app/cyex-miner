@@ -1637,8 +1637,6 @@ function renderRules() {
 
 function applyPriorityLock() {
   const locked = !draft;
-  // "Fill empty slots" belongs to the watch priority, so the lock covers it too.
-  $("fill-slots").disabled = locked;
   const btn = $("prio-lock");
   btn.setAttribute("aria-pressed", String(locked));
   labelButton(btn, locked ? ICON.lock : ICON.unlock, locked ? "Priority locked" : "Priority unlocked",
