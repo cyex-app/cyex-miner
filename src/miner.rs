@@ -956,7 +956,7 @@ impl Miner {
 
         let lines = {
             let mut st = streamer.state();
-            st.stream.update_minute_watched();
+            st.session_minutes += st.stream.update_minute_watched();
             let header = format!("{} is streaming {}", streamer.username, st.stream);
             let mut lines = Vec::new();
             for campaign in &mut st.stream.campaigns {

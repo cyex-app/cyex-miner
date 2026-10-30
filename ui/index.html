@@ -735,7 +735,7 @@ const RULES = {
 const SORT_VALUE = {
   points: (s) => s.points,
   session: (s) => s.gained,
-  watched: (s) => (s.online ? s.minutes_watched : null),
+  watched: (s) => s.minutes_watched,
   streak: (s) => s.watch_streak,
 };
 
@@ -926,8 +926,10 @@ function rowHtml({ s, pos }, i) {
     + (s.watching ? '<span class="chip">watching</span>' : "")
     + (s.source === "followers" ? '<span class="chip">followed</span>' : "")
     + (s.source === "badge" ? '<span class="chip" title="Added for a badge drop, removed once the badge is earned">badge</span>' : "");
+  // The current stream's minutes lead, so they aren't cut off with a long title.
   const sub = s.online
-    ? [s.game, s.title].filter(Boolean).join(" · ") + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
+    ? [s.stream_minutes >= 1 ? `${fmt(Math.floor(s.stream_minutes))}m this stream` : "", s.game, s.title].filter(Boolean).join(" · ")
+      + (s.viewers ? ` · ${fmt(s.viewers)} viewers` : "")
     : "Offline";
   const history = Object.entries(s.history).filter(([, h]) => h.counter)
     .map(([k, h]) => `${k} ×${fmt(h.counter)} (${signed(h.amount)})`).join(", ");
@@ -945,7 +947,7 @@ function rowHtml({ s, pos }, i) {
         <div class="sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
     <td class="num">${fmt(s.points)}</td>
     <td class="num hide-xs ${s.gained > 0 ? "gain" : ""}">${signed(s.gained)}</td>
-    <td class="num hide-sm">${s.online ? fmt(Math.floor(s.minutes_watched)) + "m" : "–"}</td>
+    <td class="num hide-sm">${fmt(Math.floor(s.minutes_watched))}m</td>
     <td class="num hide-sm">${s.watch_streak == null ? "–" : fmt(s.watch_streak)}</td>
     <td class="actions"><button class="icon-btn remove ${confirmRemove === s.id ? "armed" : ""}" type="button" data-id="${esc(s.id)}"
       ${confirmRemove === s.id ? "" : 'data-tip="Remove"'} aria-label="Remove ${esc(s.username)}" aria-haspopup="dialog"

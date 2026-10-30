@@ -42,12 +42,14 @@ the web UI:
 - **Drag** the handle to reorder (or focus it and use the arrow keys). Higher channels win ties in every
   watch priority rule, and the `ORDER` rule follows the list. The number in front of each channel is its
   place in the list.
-- **Sort** the table by clicking a column header (points, points gained this session, minutes watched or
-  watch streak): highest first, click again for lowest first. Sorting only changes the view; clicking
+- **Sort** the table by clicking a column header (points, points gained this session, minutes watched this
+  session or watch streak): highest first, click again for lowest first. Sorting only changes the view; clicking
   **Channel** or the reset button at the end of the header row goes back to list order, where reordering works.
 - Long lists show their first 20 channels (in the current sort); **Show all** expands it, and the browser
   remembers the choice.
 - **Remove** asks in a small bubble next to the trash button, so removing takes a second, deliberate click.
+- **Watched** counts the minutes the miner watched a channel since it started, over all its streams; a live channel
+  shows the minutes of its current stream under its name.
 - **Star** a channel to give it a watch slot through the `PRIORITIZED` rule.
 - **Remove** a channel. It's also blacklisted so it doesn't come back from your follow list; adding it again
   un-blacklists it.

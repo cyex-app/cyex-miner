@@ -80,6 +80,8 @@ pub struct StreamerState {
     pub watch_streak: Option<u32>,
     /// Live with a badge drop the user picked and hasn't earned yet, see `Miner::update_badge_targets`.
     pub badge_drop: bool,
+    /// Minutes watched since the miner started, over every stream; `stream.minute_watched` is the current one.
+    pub session_minutes: f64,
 }
 
 impl StreamerState {

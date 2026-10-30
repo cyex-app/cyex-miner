@@ -203,7 +203,10 @@ struct StreamerView {
     title: String,
     game: Option<String>,
     viewers: i64,
+    /// Since the miner started, over every stream.
     minutes_watched: f64,
+    /// The current stream only.
+    stream_minutes: f64,
     watch_streak: Option<u32>,
     history: BTreeMap<String, HistoryEntry>,
 }
@@ -224,7 +227,8 @@ impl StreamerView {
             game: st.stream.game.as_ref().map(|g| g.display_name.clone()),
             viewers: st.stream.viewers_count,
             // Whole minutes, so the live stream only sends an update when the number shown changes.
-            minutes_watched: st.stream.minute_watched.floor(),
+            minutes_watched: st.session_minutes.floor(),
+            stream_minutes: st.stream.minute_watched.floor(),
             watch_streak: st.watch_streak,
             history: st.history.clone(),
         }

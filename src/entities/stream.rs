@@ -91,14 +91,18 @@ impl Stream {
         self.minute_watched_timestamp = 0.0;
     }
 
-    pub fn update_minute_watched(&mut self) {
+    /// Counts the time since the last watch; returns the minutes added.
+    pub fn update_minute_watched(&mut self) -> f64 {
         let now = now();
+        let mut added = 0.0;
         if self.minute_watched_timestamp != 0.0 {
             // Capped at a minute: watches are ~20s apart, and a longer gap means the stream lost its
             // watch slot for a while, which mustn't count towards the watch streak.
-            self.minute_watched += ((now - self.minute_watched_timestamp) / 60.0).min(1.0);
+            added = ((now - self.minute_watched_timestamp) / 60.0).min(1.0);
+            self.minute_watched += added;
         }
         self.minute_watched_timestamp = now;
+        added
     }
 }
 
