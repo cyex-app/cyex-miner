@@ -49,6 +49,9 @@ const PAUSED_KEY: &str = "paused";
 const FILL_SLOTS_KEY: &str = "fill_slots";
 /// Seconds a channel has to be live before it gets a watch slot, so its stream info is loaded.
 const STREAM_SETTLE_SECS: f64 = 10.0;
+/// How often offline channels with a watch streak are checked for going live, in case PubSub
+/// missed it. One batched request, and a streak can be earned at any point of a stream.
+const LIVE_CHECK_SECS: u64 = 3 * 60;
 /// Recent events kept for web UI clients that connect later.
 const MAX_EVENTS: usize = 50;
 
@@ -221,6 +224,7 @@ impl Miner {
         tokio::spawn(self.clone().watch_loop());
         tokio::spawn(self.clone().campaigns_loop());
         tokio::spawn(self.clone().refresh_context_loop());
+        tokio::spawn(self.clone().live_check_loop());
     }
 
     /// One-time import of the `streamers` and `blacklist` lists from config.toml into the database.
@@ -573,7 +577,27 @@ impl Miner {
         let ids: Vec<String> = streamers.iter().map(|s| s.channel_id.clone()).collect();
         let streaks = self.twitch.watch_streaks(&ids).await;
         for (streamer, streak) in streamers.iter().zip(streaks) {
-            streamer.state().watch_streak = streak;
+            let earned = {
+                let mut st = streamer.state();
+                st.watch_streak = streak;
+                let live = st.is_online && st.stream.watch_streak_missing;
+                match (st.stream.streak_at_start, streak) {
+                    // Live before the first count came in (e.g. at startup): count from here.
+                    (None, Some(_)) if live && st.stream.minute_watched == 0.0 => st.stream.streak_at_start = streak,
+                    // A missed stream reset the streak since the count was taken.
+                    (Some(old), Some(new)) if new < old => st.stream.streak_at_start = streak,
+                    _ => {}
+                }
+                // The count going up means this stream's streak is in, even if its bonus event was missed.
+                let earned = live && matches!((st.stream.streak_at_start, streak), (Some(old), Some(new)) if new > old);
+                if earned {
+                    st.stream.watch_streak_missing = false;
+                }
+                earned
+            };
+            if earned {
+                self.event(format!("Watch streak earned on {streamer}"));
+            }
         }
     }
 
@@ -727,7 +751,8 @@ impl Miner {
             if !st.is_online {
                 st.online_at = now();
                 st.is_online = true;
-                st.stream.init_watch_streak();
+                let streak = st.watch_streak;
+                st.stream.init_watch_streak(streak);
             }
             st.checked = true;
             changed
@@ -822,13 +847,26 @@ impl Miner {
             "user_id": user_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| user_id.clone().into()),
         });
 
-        let mut st = streamer.state();
-        st.stream
-            .update(info.broadcast_id, &info.title, info.game, info.viewers);
-        // Campaigns for a game the channel no longer plays would keep `has_unclaimed_drops` true.
-        st.stream.campaigns.retain(|c| campaigns_ids.contains(&c.id));
-        st.stream.campaigns_ids = campaigns_ids;
-        st.stream.payload = Some(json!([{ "event": "minute-watched", "properties": properties }]));
+        let new_stream = {
+            let mut st = streamer.state();
+            // A new broadcast is a new stream with its own watch streak, even when going offline
+            // in between was missed.
+            let new_stream = st.is_online && st.stream.broadcast_id.as_ref().is_some_and(|id| *id != info.broadcast_id);
+            if new_stream {
+                let streak = st.watch_streak;
+                st.stream.init_watch_streak(streak);
+            }
+            st.stream
+                .update(info.broadcast_id, &info.title, info.game, info.viewers);
+            // Campaigns for a game the channel no longer plays would keep `has_unclaimed_drops` true.
+            st.stream.campaigns.retain(|c| campaigns_ids.contains(&c.id));
+            st.stream.campaigns_ids = campaigns_ids;
+            st.stream.payload = Some(json!([{ "event": "minute-watched", "properties": properties }]));
+            new_stream
+        };
+        if new_stream {
+            self.event(format!("{streamer} started a new stream"));
+        }
     }
 
     async fn load_points_context(&self, streamer: &Streamer) -> Result<()> {
@@ -941,7 +979,7 @@ impl Miner {
         }
     }
 
-    async fn watch_once(&self, streamer: &Streamer) -> Result<()> {
+    async fn watch_once(&self, streamer: &Arc<Streamer>) -> Result<()> {
         let payload = streamer
             .state()
             .stream
@@ -954,9 +992,14 @@ impl Miner {
             return Ok(());
         }
 
-        let lines = {
+        let (lines, check_streak) = {
             let mut st = streamer.state();
+            let before = st.stream.minute_watched;
             st.session_minutes += st.stream.update_minute_watched();
+            // Once a minute while a streak is pending, see whether Twitch's count went up.
+            let check_streak = st.stream.watch_streak_missing
+                && st.stream.streak_at_start.is_some()
+                && st.stream.minute_watched.floor() > before.floor();
             let header = format!("{} is streaming {}", streamer.username, st.stream);
             let mut lines = Vec::new();
             for campaign in &mut st.stream.campaigns {
@@ -973,10 +1016,13 @@ impl Miner {
                     }
                 }
             }
-            lines
+            (lines, check_streak)
         };
         for line in lines {
             self.event(line);
+        }
+        if check_streak {
+            self.refresh_watch_streaks(std::slice::from_ref(streamer)).await;
         }
         Ok(())
     }
@@ -994,6 +1040,55 @@ impl Miner {
             }
             // A missed stream resets a streak without any event, so check them all.
             self.refresh_watch_streaks(&streamers).await;
+        }
+    }
+
+    /// Going live is noticed through PubSub, which can miss it (a dropped connection or a failed
+    /// subscription), and a missed stream costs its watch streak. So offline channels with a
+    /// streak to keep are also checked, all in one batched request.
+    async fn live_check_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(Duration::from_secs(LIVE_CHECK_SECS)).await;
+            if self.paused() {
+                continue;
+            }
+            let now = now();
+            let offline: Vec<_> = self
+                .streamers()
+                .into_iter()
+                .filter(|s| {
+                    let st = s.state();
+                    s.settings.watch_streak
+                        && st.watch_streak.is_some_and(|n| n > 0)
+                        && !st.is_online
+                        && now >= st.offline_at + 60.0
+                })
+                .collect();
+            if offline.is_empty() {
+                continue;
+            }
+            let logins: Vec<String> = offline.iter().map(|s| s.username.clone()).collect();
+            let infos = self.twitch.stream_infos(&logins).await;
+            for (streamer, info) in offline.iter().zip(infos) {
+                let info = match info {
+                    Ok(Some(info)) => info,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        debug!("Live check failed for {}: {e:#}", streamer.username);
+                        continue;
+                    }
+                };
+                // Removed meanwhile, or PubSub caught it first.
+                if self.find_by_channel(&streamer.channel_id).is_none() || streamer.state().is_online {
+                    continue;
+                }
+                let campaigns_ids = match wants_campaigns(streamer, &info) {
+                    true => self.twitch.campaign_ids_for_channel(&streamer.channel_id).await,
+                    false => Vec::new(),
+                };
+                self.apply_stream_info(streamer, info, campaigns_ids);
+                self.set_online(streamer);
+            }
         }
     }
 

@@ -103,8 +103,8 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
   `POINTS_DESCENDING`, `ORDER`. Set them in the web UI: unlock **Watch priority**, tick the rules you want and drag them
   into order (mouse, touch, or the arrow keys on a handle). Changes are saved right away in the database and
   override `priority` in the config from then on. For example `STREAK`, `ORDER` keeps every watch streak and otherwise
-  watches the top 2 live channels of the list. The default puts the bonuses first: `BADGES`, `STREAK` (+300 to +450
-  for about 7 minutes), `SUBSCRIBED` (up to 2× points), then starred channels, drops and the list
+  watches the top 2 live channels of the list. The default puts the bonuses first: `BADGES`, `STREAK` (+300 to +450,
+  usually after about 7 minutes), `SUBSCRIBED` (up to 2× points), then starred channels, drops and the list
 - **Fill empty slots** (on by default, under Watch priority): when the rules leave a slot free, the next live channel in
   the list takes it, so no watch time goes unused
 - New streams get a watch slot about 10 seconds after going live
@@ -115,7 +115,11 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
 - Shows the current watch streak of each channel
 - Pause and resume mining from the web UI (**Pause** next to your name). While paused nothing is watched, chats are
   left and no bonuses, drops, moments or raids are claimed; the pause is saved in the database and survives restarts
-- Claims bonus chests and moments, joins raids, keeps watch streaks
+- Claims bonus chests and moments, joins raids, keeps watch streaks. `STREAK` keeps a stream's slot until Twitch
+  confirms the streak: the bonus arrives or the channel's streak count goes up (checked once a minute while it's
+  watched). Channels without a streak yet fall back to about 7 minutes. Offline channels with a streak are also
+  checked for going live every 3 minutes (one batched request), in case the live notice from Twitch was missed, and a
+  new broadcast counts as a new stream even when going offline in between was missed
 - Drop campaigns: tracks progress and claims drops automatically (`claim_drops_startup` claims the inventory on start)
 - IRC chat presence (`ALWAYS` / `NEVER` / `ONLINE` / `OFFLINE`)
 - Can load the channels you follow

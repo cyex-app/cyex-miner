@@ -31,6 +31,8 @@ pub struct Stream {
     pub campaigns_ids: Vec<String>,
     pub payload: Option<Value>,
     pub watch_streak_missing: bool,
+    /// The channel's streak count when this stream started; it going up means the streak is in.
+    pub streak_at_start: Option<u32>,
     pub minute_watched: f64,
     last_update: f64,
     minute_watched_timestamp: f64,
@@ -47,6 +49,7 @@ impl Default for Stream {
             campaigns_ids: Vec::new(),
             payload: None,
             watch_streak_missing: true,
+            streak_at_start: None,
             minute_watched: 0.0,
             last_update: 0.0,
             minute_watched_timestamp: 0.0,
@@ -85,8 +88,9 @@ impl Stream {
         self.last_update = 0.0;
     }
 
-    pub fn init_watch_streak(&mut self) {
+    pub fn init_watch_streak(&mut self, streak: Option<u32>) {
         self.watch_streak_missing = true;
+        self.streak_at_start = streak;
         self.minute_watched = 0.0;
         self.minute_watched_timestamp = 0.0;
     }

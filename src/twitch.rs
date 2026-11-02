@@ -337,6 +337,16 @@ impl Twitch {
         parse_stream_info(&self.gql(&STREAM_INFO.with(json!({ "channel": login }))).await?)
     }
 
+    /// Stream info for many channels, batched together; `Ok(None)` means offline.
+    pub async fn stream_infos(&self, logins: &[String]) -> Vec<Result<Option<StreamInfo>>> {
+        let bodies = logins.iter().map(|login| STREAM_INFO.with(json!({ "channel": login }))).collect();
+        self.gql_batch(bodies)
+            .await
+            .into_iter()
+            .map(|r| r.and_then(|resp| parse_stream_info(&resp)))
+            .collect()
+    }
+
     /// Points context and stream info for many channels, batched together.
     pub async fn channels_overview(
         &self,

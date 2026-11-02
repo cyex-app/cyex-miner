@@ -157,14 +157,15 @@ impl Streamer {
     }
 
     /// Whether this stream still needs watching to earn its watch streak: the streak isn't
-    /// claimed, the stream started more than 30 minutes after the previous one ended, and less
-    /// than ~7 minutes of it were watched.
+    /// claimed and the stream started more than 30 minutes after the previous one ended. Where
+    /// Twitch reports a streak count, that holds until the bonus arrives or the count goes up;
+    /// without one (no streak yet), until ~7 minutes were watched, when Twitch usually gives it.
     pub fn streak_missing(&self) -> bool {
         let st = self.state();
         self.settings.watch_streak
             && st.stream.watch_streak_missing
             && (st.offline_at == 0.0 || (now() - st.offline_at) / 60.0 > 30.0)
-            && st.stream.minute_watched < 7.0
+            && (st.stream.streak_at_start.is_some() || st.stream.minute_watched < 7.0)
     }
 }
 
