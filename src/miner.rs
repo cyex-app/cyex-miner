@@ -938,19 +938,26 @@ impl Miner {
             let mut watching = priority::select_watching(&candidates, &rules);
             // Twitch counts drop progress on one stream at a time; switching between two every few
             // seconds keeps restarting it. So while a picked badge can be earned, only its channel
-            // is watched (like TwitchDropsMiner), and the second slot waits.
+            // is watched (like TwitchDropsMiner), and the second slot waits. Channels the rules
+            // above BADGES picked (e.g. a pending watch streak) keep their slot, as ranked.
+            let above: Vec<Arc<Streamer>> = match rules.iter().position(|r| *r == Priority::Badges) {
+                Some(pos) => priority::select_watching(&candidates, &rules[..pos]),
+                None => Vec::new(),
+            };
             let badge_channel = watching.iter().find(|s| s.state().badge_drop).cloned();
             let focus_now = badge_channel.as_ref().map(|s| s.channel_id.clone());
             if focus_now != focus {
                 match &badge_channel {
-                    Some(s) => self.event(format!("Watching only {s} while it can earn a picked badge")),
+                    Some(s) => self.event(format!(
+                        "Watching {s} for a picked badge; the second slot only goes to rules ranked above BADGES"
+                    )),
                     None if focus.is_some() => self.event("Back to watching 2 channels"),
                     None => {}
                 }
                 focus = focus_now;
             }
             if let Some(s) = badge_channel {
-                watching = vec![s];
+                watching.retain(|w| Arc::ptr_eq(w, &s) || above.iter().any(|a| Arc::ptr_eq(a, w)));
             }
             for s in &streamers {
                 s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));

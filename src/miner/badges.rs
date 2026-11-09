@@ -34,6 +34,8 @@ const QUICK_ADD: usize = 5;
 const AUTO_KEY: &str = "badges_auto";
 /// How often auto select tries to add channels for a badge none of the list can earn.
 const AUTO_ADD_RETRY_SECS: f64 = 30.0 * 60.0;
+/// A quick-added channel offline this long is removed, making room for live ones.
+const BADGE_CHANNEL_OFFLINE_SECS: f64 = 10.0 * 60.0;
 
 /// A badge drop as the web UI shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -507,14 +509,27 @@ impl Miner {
         }
         self.pick_all_badges();
         let now = now();
+        let games: HashMap<String, String> = {
+            let badges = self.badges.badges.read().unwrap();
+            badges.iter().map(|b| (b.campaign_id.clone(), b.game_id.clone())).collect()
+        };
         let needs_channels: Vec<(String, String)> = {
-            // Campaigns some live channel in the list can earn right now.
+            // Campaigns some live channel in the list can earn right now: on the campaign and
+            // playing its game, like `update_badge_targets`.
             let covered: HashSet<String> = self
                 .streamers()
                 .iter()
                 .filter_map(|s| {
                     let st = s.state();
-                    st.is_online.then(|| st.stream.campaigns_ids.clone())
+                    let game = st.stream.game.as_ref().map(|g| g.id.clone());
+                    st.is_online.then(|| {
+                        st.stream
+                            .campaigns_ids
+                            .iter()
+                            .filter(|id| games.get(*id).is_some_and(|g| game.as_ref() == Some(g)))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
                 })
                 .flatten()
                 .collect();
@@ -534,10 +549,17 @@ impl Miner {
                 .collect()
         };
         for (id, name) in needs_channels {
-            self.badges.auto_tried.lock().unwrap().insert(id.clone(), now);
-            // Each added channel is logged as it's added.
-            if let Err(e) = self.quick_add_badge(&id).await {
-                info!("No channels added for the {name} badge yet: {e:#}");
+            // Each added channel is logged as it's added. Only a failed try waits before the next
+            // one; after a successful add, the badge is looked after again as soon as those
+            // channels can't earn it anymore.
+            match self.quick_add_badge(&id).await {
+                Ok(_) => {
+                    self.badges.auto_tried.lock().unwrap().remove(&id);
+                }
+                Err(e) => {
+                    self.badges.auto_tried.lock().unwrap().insert(id.clone(), now);
+                    info!("No channels added for the {name} badge yet: {e:#}");
+                }
             }
         }
     }
@@ -621,29 +643,45 @@ impl Miner {
         Ok(added)
     }
 
-    /// Removes quick-added channels whose campaign has every badge earned, or has ended.
+    /// Removes quick-added channels whose campaign has every badge earned or has ended, and ones
+    /// that can't earn it anymore (offline for a while, or playing another game), so they don't
+    /// count toward the limit and fresh channels can be added in their place.
     pub(super) fn prune_badge_channels(&self) {
-        let earned: HashSet<String> = {
+        let (earned, games): (HashSet<String>, HashMap<String, String>) = {
             let badges = self.badges.badges.read().unwrap();
             let open = open_campaigns(&badges);
-            badges
+            let earned = badges
                 .iter()
                 .filter(|b| !open.contains(&b.campaign_id))
                 .map(|b| b.campaign_id.clone())
-                .collect()
+                .collect();
+            let games = badges.iter().map(|b| (b.campaign_id.clone(), b.game_id.clone())).collect();
+            (earned, games)
         };
         let now = now();
-        let done: Vec<(String, &str)> = self
-            .badges
-            .added
-            .lock()
-            .unwrap()
+        let gone = |channel_id: &str, campaign_id: &str| {
+            let Some(s) = self.find_by_channel(channel_id) else { return false };
+            let st = s.state();
+            if !st.checked {
+                return false;
+            }
+            if !st.is_online {
+                return now - st.offline_at > BADGE_CHANNEL_OFFLINE_SECS;
+            }
+            let game = st.stream.game.as_ref().map(|g| g.id.as_str());
+            games.get(campaign_id).is_some_and(|id| !id.is_empty() && game.is_some_and(|g| g != id))
+        };
+        // A copy, so no channel state is locked while the list is.
+        let added = self.badges.added.lock().unwrap().clone();
+        let done: Vec<(String, &str)> = added
             .iter()
             .filter_map(|(id, a)| {
                 if earned.contains(&a.campaign_id) {
                     Some((id.clone(), "badge earned"))
+                } else if now > a.ends_at {
+                    Some((id.clone(), "badge drop ended"))
                 } else {
-                    (now > a.ends_at).then(|| (id.clone(), "badge drop ended"))
+                    gone(id, &a.campaign_id).then(|| (id.clone(), "it can't earn the badge right now"))
                 }
             })
             .collect();

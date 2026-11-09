@@ -57,9 +57,11 @@ the web UI:
   need a subscription or purchase aren't shown). Tick a badge to give its eligible live channels a watch slot
   through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. **Auto select
   badges** does all of it hands-off: every badge is picked as it starts, and when no channel in your list can
-  earn one, live eligible channels are added for it (retried every 30 minutes, at most 10 per badge). Twitch counts
-  drop progress on one stream at a time, so while a picked badge can be earned only its channel is watched; the
-  second slot is used again once it's earned or no badge channel is live. **Add channels** adds up to 5 eligible channels
+  earn one, live eligible channels are added for it (at most 10 per badge at a time; a try that finds none is
+  retried after 30 minutes). Added channels that go offline for 10 minutes or switch game are removed, so new ones
+  can take their place. Twitch counts drop progress on one stream at a time, so while a picked badge can be earned
+  its channel is watched and the second slot only goes to a rule ranked above `BADGES` (e.g. a pending `STREAK`);
+  otherwise it's used again once the badge is earned or no badge channel is live. **Add channels** adds up to 5 eligible channels
   that are live, most viewers first; they're removed again once every badge of the campaign is earned, the campaign
   ends or you untick it. Channels you added yourself are never removed this way.
   A campaign with several badges (e.g. for 30, 60 and 90 minutes) shows its next one, and a pick or added channel
