@@ -564,6 +564,16 @@ impl Twitch {
         Ok(inventory.clone())
     }
 
+    /// The drops inventory and dashboard with reward campaigns included, as Twitch sends them, for
+    /// the badge debug file.
+    pub async fn badge_debug_snapshot(&self) -> Result<Value> {
+        let inventory = self.gql(&INVENTORY.with(json!({ "fetchRewardCampaigns": true }))).await?;
+        let dashboard = self
+            .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": true })))
+            .await?;
+        Ok(json!({ "inventory": inventory["data"], "dashboard": dashboard["data"] }))
+    }
+
     pub async fn active_drop_campaigns(&self) -> Result<Vec<Value>> {
         let resp = self
             .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": false })))

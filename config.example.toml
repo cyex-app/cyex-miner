@@ -13,6 +13,10 @@ streamers = []
 # Claim all claimable drops from your inventory on startup.
 claim_drops_startup = false
 
+# Save what Twitch sends about drops and reward campaigns to badge-debug.jsonl next to this file
+# (every 30 minutes when it changed, at most ~20 MB), to see how new kinds of badge campaigns work.
+badge_debug = true
+
 # How to pick the (max 2) channels watched at the same time: rules in order of importance, tried
 # until both slots are taken. Ties go to the channel higher in the list.
 #   BADGES             live channels eligible for a badge drop you picked in the web UI

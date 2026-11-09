@@ -5,3 +5,4 @@ config.toml
 web_token
 miner.db*
 config-*.toml
+badge-debug.jsonl*

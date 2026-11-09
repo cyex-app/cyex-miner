@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
         .filter(|p| !p.as_os_str().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
+    config.data_dir = data_dir.clone();
 
     let state = Arc::new(AppState {
         login_prompt: Mutex::new(None),

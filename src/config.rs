@@ -1,4 +1,7 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -102,6 +105,11 @@ pub struct Config {
     pub streamer_defaults: StreamerSettings,
     /// Only read once, to import into the database.
     pub streamers: Vec<StreamerEntry>,
+    /// Save what Twitch sends about drops and reward campaigns to `badge-debug.jsonl`.
+    pub badge_debug: bool,
+    /// The folder of the config file, where the miner keeps its files.
+    #[serde(skip)]
+    pub data_dir: PathBuf,
 }
 
 impl Default for Config {
@@ -124,6 +132,8 @@ impl Default for Config {
             web: WebConfig::default(),
             streamer_defaults: StreamerSettings::default(),
             streamers: Vec::new(),
+            badge_debug: true,
+            data_dir: PathBuf::from("."),
         }
     }
 }

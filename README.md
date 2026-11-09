@@ -122,6 +122,9 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
   checked for going live every 3 minutes (one batched request), in case the live notice from Twitch was missed, and a
   new broadcast counts as a new stream even when going offline in between was missed
 - Drop campaigns: tracks progress and claims drops automatically (`claim_drops_startup` claims the inventory on start)
+- `badge_debug` (on by default) saves what Twitch sends about drops and reward campaigns to `badge-debug.jsonl`
+  next to the config, every 30 minutes when it changed. It's for finding out how badge campaigns the miner doesn't
+  handle yet work (a watch goal on several days, a badge to pick); past 10 MB the file moves to `.old`
 - IRC chat presence (`ALWAYS` / `NEVER` / `ONLINE` / `OFFLINE`)
 - Can load the channels you follow
 - Prints a session report on Ctrl+C

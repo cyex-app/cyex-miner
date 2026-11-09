@@ -1,9 +1,9 @@
 //! Drop campaigns: tracks progress on the live channels and claims finished drops.
 
-use std::{sync::Arc, time::Duration};
+use std::{fs, io::Write, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{debug, warn};
 
 use super::Miner;
@@ -12,7 +12,46 @@ use crate::{
     utils::{now, random_between},
 };
 
+/// The badge debug file, next to the config.
+const BADGE_DEBUG_FILE: &str = "badge-debug.jsonl";
+/// Past this size the file is moved to `badge-debug.jsonl.old` and a new one started.
+const BADGE_DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
 impl Miner {
+    /// Appends what Twitch sends about drops and reward campaigns to `BADGE_DEBUG_FILE` when it
+    /// changed, to see how badge campaigns the miner doesn't handle yet look (watch goals on
+    /// several days, badges to pick from). `last` is the previous snapshot.
+    async fn write_badge_debug(&self, last: &mut String) {
+        let mut snapshot = match self.twitch.badge_debug_snapshot().await {
+            Ok(snapshot) => snapshot,
+            Err(e) => return debug!("Could not load the badge debug data: {e:#}"),
+        };
+        // The regular campaign list is long and already handled; a summary is enough.
+        if let Some(campaigns) = snapshot["dashboard"]["currentUser"]["dropCampaigns"].as_array_mut() {
+            for c in campaigns.iter_mut() {
+                *c = json!({ "id": c["id"], "name": c["name"], "status": c["status"], "game": c["game"]["displayName"] });
+            }
+        }
+        let text = snapshot.to_string();
+        if text == *last {
+            return;
+        }
+        let path = self.config.data_dir.join(BADGE_DEBUG_FILE);
+        if fs::metadata(&path).is_ok_and(|m| m.len() > BADGE_DEBUG_MAX_BYTES) {
+            let _ = fs::rename(&path, path.with_extension("jsonl.old"));
+        }
+        let line = json!({ "at": chrono::Utc::now().to_rfc3339(), "data": snapshot });
+        let written = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| writeln!(f, "{line}"));
+        match written {
+            Ok(()) => *last = text,
+            Err(e) => warn!("Could not write {}: {e}", path.display()),
+        }
+    }
+
     async fn claim_drop(&self, drop: &Drop) -> bool {
         if self.paused() {
             return false;
@@ -117,6 +156,7 @@ impl Miner {
     pub(super) async fn campaigns_loop(self: Arc<Self>) {
         let mut campaigns: Vec<Campaign> = Vec::new();
         let mut last_refresh = 0.0;
+        let mut last_badge_debug = String::new();
         loop {
             let streamers = self.streamers();
             // The defaults count too: badge drops are listed before any channel is added for them.
@@ -135,6 +175,9 @@ impl Miner {
                             campaigns = c;
                         }
                         Err(e) => warn!("Could not load drop campaigns: {e:#}"),
+                    }
+                    if self.config.badge_debug {
+                        self.write_badge_debug(&mut last_badge_debug).await;
                     }
                 }
                 match self.twitch.inventory().await {
