@@ -157,7 +157,12 @@ impl Campaign {
         Some(Self {
             id: v["id"].as_str()?.to_string(),
             game_id: v["game"]["id"].as_str().unwrap_or_default().to_string(),
-            game_name: v["game"]["displayName"].as_str().unwrap_or_default().to_string(),
+            // The inventory names the game `name`, the campaign details `displayName`.
+            game_name: v["game"]["displayName"]
+                .as_str()
+                .or_else(|| v["game"]["name"].as_str())
+                .unwrap_or_default()
+                .to_string(),
             game_slug: v["game"]["slug"].as_str().unwrap_or_default().to_string(),
             name: v["name"].as_str().unwrap_or_default().to_string(),
             allowed_channels: if v["allow"]["isEnabled"].as_bool() == Some(false) {
@@ -185,20 +190,31 @@ impl Campaign {
         self.start_at < now && now < self.end_at
     }
 
-    /// The drop that gives a badge for watching alone, and that badge. A reward counts as a badge
-    /// when Twitch marks it as one, or when its name is in `event_badges` (lowercase names of
-    /// Twitch's event badges), for badges Twitch delivers some other way.
-    pub fn watch_badge_drop(&self, event_badges: &HashSet<String>) -> Option<(&Drop, &BadgeReward)> {
-        self.drops
+    /// The drops that give a badge for watching alone, with their badge, fewest minutes first (a
+    /// campaign can have several, e.g. for 30, 60 and 90 minutes). A reward counts as a badge when
+    /// Twitch marks it as one, or when its name is in `event_badges` (lowercase names of Twitch's
+    /// event badges), for badges Twitch delivers some other way.
+    pub fn watch_badge_drops(&self, event_badges: &HashSet<String>) -> Vec<(&Drop, &BadgeReward)> {
+        let mut drops: Vec<_> = self
+            .drops
             .iter()
             .filter(|d| d.minutes_required > 0 && d.required_subs == 0)
-            .find_map(|d| {
+            .filter_map(|d| {
                 let reward = d
                     .badge
                     .as_ref()
                     .or_else(|| d.rewards.iter().find(|r| event_badges.contains(&r.name.to_lowercase())))?;
                 Some((d, reward))
             })
+            .collect();
+        drops.sort_by_key(|(d, _)| d.minutes_required);
+        drops
+    }
+
+    /// The first of `watch_badge_drops`.
+    #[cfg(test)]
+    pub fn watch_badge_drop(&self, event_badges: &HashSet<String>) -> Option<(&Drop, &BadgeReward)> {
+        self.watch_badge_drops(event_badges).into_iter().next()
     }
 
     /// Removes drops that are already claimed or outside their time window.

@@ -60,9 +60,10 @@ the web UI:
   earn one, live eligible channels are added for it (retried every 30 minutes, at most 10 per badge). Twitch counts
   drop progress on one stream at a time, so while a picked badge can be earned only its channel is watched; the
   second slot is used again once it's earned or no badge channel is live. **Add channels** adds up to 5 eligible channels
-  that are live, most viewers first; they're removed again once the badge is earned, the campaign ends or you
-  untick it. Channels you added yourself are never removed this way.
-  Earned badges leave the list. The button next to the title counts the badges earned since the miner started;
+  that are live, most viewers first; they're removed again once every badge of the campaign is earned, the campaign
+  ends or you untick it. Channels you added yourself are never removed this way.
+  A campaign with several badges (e.g. for 30, 60 and 90 minutes) shows its next one, and a pick or added channel
+  stays until the last is earned. Earned badges leave the list. The button next to the title counts the badges earned since the miner started;
   click it to see them all in a window, as a list or a grid (which widens with the badges on large screens), with each one's art, game, the channel it was earned on (a link, kept by channel id through renames), the watch time it took
   and when.
 

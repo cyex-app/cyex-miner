@@ -90,32 +90,52 @@ struct Badge {
 }
 
 impl Badge {
+    /// Every badge for watch time in the campaign, fewest minutes first.
     /// `events`: Twitch's free event badges, lowercase name -> image URL.
-    fn from_campaign(c: &Campaign, events: &HashMap<String, String>) -> Option<Self> {
+    fn from_campaign(c: &Campaign, events: &HashMap<String, String>) -> Vec<Self> {
         let names: HashSet<String> = events.keys().cloned().collect();
-        let (drop, reward) = c.watch_badge_drop(&names)?;
-        let image = match reward.image.as_str() {
-            "" => events.get(&reward.name.to_lowercase()).cloned().unwrap_or_default(),
-            image => image.to_string(),
-        };
-        Some(Self {
-            campaign_id: c.id.clone(),
-            drop_id: drop.id.clone(),
-            benefit_id: reward.benefit_id.clone(),
-            name: if reward.name.is_empty() { drop.name.clone() } else { reward.name.clone() },
-            image,
-            game_id: c.game_id.clone(),
-            game: c.game_name.clone(),
-            game_slug: c.game_slug.clone(),
-            allowed: c.allowed_channels.clone(),
-            minutes_required: drop.minutes_required,
-            minutes_watched: 0,
-            ends_at: drop.end_at.min(c.end_at).timestamp() as f64,
-            earned: false,
-            seen_unearned: false,
-            from_inventory: false,
-        })
+        c.watch_badge_drops(&names)
+            .into_iter()
+            .map(|(drop, reward)| {
+                let image = match reward.image.as_str() {
+                    "" => events.get(&reward.name.to_lowercase()).cloned().unwrap_or_default(),
+                    image => image.to_string(),
+                };
+                Self {
+                    campaign_id: c.id.clone(),
+                    drop_id: drop.id.clone(),
+                    benefit_id: reward.benefit_id.clone(),
+                    name: if reward.name.is_empty() { drop.name.clone() } else { reward.name.clone() },
+                    image,
+                    game_id: c.game_id.clone(),
+                    game: c.game_name.clone(),
+                    game_slug: c.game_slug.clone(),
+                    allowed: c.allowed_channels.clone(),
+                    minutes_required: drop.minutes_required,
+                    minutes_watched: 0,
+                    ends_at: drop.end_at.min(c.end_at).timestamp() as f64,
+                    earned: false,
+                    seen_unearned: false,
+                    from_inventory: false,
+                }
+            })
+            .collect()
     }
+}
+
+/// The badge of a campaign to show and work on: the quickest one not earned yet, else the longest.
+fn current<'a>(badges: &'a [Badge], campaign_id: &str) -> Option<&'a Badge> {
+    let of_campaign = badges.iter().filter(|b| b.campaign_id == campaign_id);
+    of_campaign
+        .clone()
+        .filter(|b| !b.earned)
+        .min_by_key(|b| b.minutes_required)
+        .or_else(|| of_campaign.max_by_key(|b| b.minutes_required))
+}
+
+/// Campaigns with a badge left to earn.
+fn open_campaigns(badges: &[Badge]) -> HashSet<String> {
+    badges.iter().filter(|b| !b.earned).map(|b| b.campaign_id.clone()).collect()
 }
 
 /// A channel the quick add put in the list.
@@ -180,16 +200,15 @@ pub(crate) fn parse_event_badges(resp: &Value, now: f64) -> HashMap<String, Stri
 }
 
 impl Miner {
-    /// The badges that can still be earned; earned ones are in `earned_badges`.
+    /// The badges that can still be earned, one per campaign: the next one of a campaign with
+    /// several. Earned ones are in `earned_badges`.
     pub fn badges(&self) -> Vec<BadgeView> {
         let picked = self.badges.picked.read().unwrap().clone();
         let added = self.badges.added.lock().unwrap().clone();
-        self.badges
-            .badges
-            .read()
-            .unwrap()
+        let badges = self.badges.badges.read().unwrap();
+        let view = badges
             .iter()
-            .filter(|b| !b.earned)
+            .filter(|b| !b.earned && current(&badges, &b.campaign_id).is_some_and(|c| c.drop_id == b.drop_id))
             .map(|b| BadgeView {
                 campaign_id: b.campaign_id.clone(),
                 name: b.name.clone(),
@@ -203,7 +222,8 @@ impl Miner {
                 allowed_channels: b.allowed.len(),
                 added_channels: added.values().filter(|a| a.campaign_id == b.campaign_id).count(),
             })
-            .collect()
+            .collect();
+        view
     }
 
     pub fn earned_badges(&self) -> Vec<EarnedBadge> {
@@ -217,13 +237,9 @@ impl Miner {
         earned
     }
 
+    /// The campaign's next badge to earn (its last one once all are earned).
     fn find_badge(&self, campaign_id: &str) -> Result<Badge> {
-        self.badges
-            .badges
-            .read()
-            .unwrap()
-            .iter()
-            .find(|b| b.campaign_id == campaign_id)
+        current(&self.badges.badges.read().unwrap(), campaign_id)
             .cloned()
             .ok_or_else(|| anyhow!("No running badge drop {campaign_id}"))
     }
@@ -242,21 +258,25 @@ impl Miner {
             let mut badges = self.badges.badges.write().unwrap();
             let mut fresh: Vec<Badge> = campaigns
                 .iter()
-                .filter_map(|c| Badge::from_campaign(c, &events))
+                .flat_map(|c| Badge::from_campaign(c, &events))
                 .map(|mut b| {
-                    if let Some(old) = badges.iter().find(|o| o.campaign_id == b.campaign_id) {
+                    // By drop: a campaign's badges each have their own progress.
+                    if let Some(old) = badges.iter().find(|o| o.drop_id == b.drop_id) {
                         b.minutes_watched = old.minutes_watched;
                         b.earned = old.earned;
                         b.seen_unearned = old.seen_unearned;
+                        if b.game.is_empty() {
+                            b.game = old.game.clone();
+                        }
                     }
                     b
                 })
                 .collect();
-            let listed = fresh.len();
+            let listed = fresh.iter().map(|b| &b.campaign_id).collect::<HashSet<_>>().len();
             // Badges only the inventory knows stay until they end.
             let from_inventory: Vec<Badge> = badges
                 .iter()
-                .filter(|b| b.from_inventory && b.ends_at > now && !fresh.iter().any(|f| f.campaign_id == b.campaign_id))
+                .filter(|b| b.from_inventory && b.ends_at > now && !fresh.iter().any(|f| f.drop_id == b.drop_id))
                 .cloned()
                 .collect();
             fresh.extend(from_inventory);
@@ -302,10 +322,10 @@ impl Miner {
         let mut badges = self.badges.badges.write().unwrap();
         for json in inventory["dropCampaignsInProgress"].as_array().into_iter().flatten() {
             let Some(campaign) = Campaign::from_json(json) else { continue };
-            if badges.iter().any(|b| b.campaign_id == campaign.id) {
-                continue;
-            }
-            if let Some(mut badge) = Badge::from_campaign(&campaign, &events).filter(|b| b.ends_at > now) {
+            for mut badge in Badge::from_campaign(&campaign, &events) {
+                if badge.ends_at <= now || badges.iter().any(|b| b.drop_id == badge.drop_id) {
+                    continue;
+                }
                 info!("Found the {} badge drop in the drops inventory", badge.name);
                 badge.from_inventory = true;
                 badges.push(badge);
@@ -318,13 +338,15 @@ impl Miner {
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
         self.add_inventory_badges(inventory);
         // Which watched channel each campaign is earned on, for the earned list.
-        let watched: Vec<(String, String, HashSet<String>)> = self
+        // (channel id, login, game, campaign ids)
+        let watched: Vec<(String, String, String, HashSet<String>)> = self
             .streamers()
             .iter()
             .filter_map(|s| {
                 let st = s.state();
                 let ids = st.stream.campaigns_ids.iter().cloned().collect();
-                (st.watching && st.badge_drop).then(|| (s.channel_id.clone(), s.username.clone(), ids))
+                let game = st.stream.game.as_ref().map(|g| g.display_name.clone()).unwrap_or_default();
+                (st.watching && st.badge_drop).then(|| (s.channel_id.clone(), s.username.clone(), game, ids))
             })
             .collect();
         let mut newly = Vec::new();
@@ -350,16 +372,21 @@ impl Miner {
                 done |= p["isClaimed"].as_bool() == Some(true);
             }
             if done && !b.earned && b.seen_unearned {
-                let channel = watched.iter().find(|(_, _, ids)| ids.contains(campaign_id));
+                let channel = watched.iter().find(|(_, _, _, ids)| ids.contains(campaign_id));
+                // The stream's game where the campaign didn't name one.
+                let game = match (b.game.is_empty(), channel) {
+                    (true, Some((_, _, game, _))) => game.clone(),
+                    _ => b.game.clone(),
+                };
                 newly.push(EarnedBadge {
                     campaign_id: b.campaign_id.clone(),
                     name: b.name.clone(),
                     image: b.image.clone(),
-                    game: b.game.clone(),
+                    game,
                     minutes_required: b.minutes_required,
                     earned_at: now(),
-                    channel_id: channel.map(|(id, _, _)| id.clone()),
-                    channel: channel.map(|(_, login, _)| login.clone()),
+                    channel_id: channel.map(|(id, _, _, _)| id.clone()),
+                    channel: channel.map(|(_, login, _, _)| login.clone()),
                 });
             }
             b.earned |= done;
@@ -462,14 +489,8 @@ impl Miner {
     fn pick_all_badges(&self) {
         let unpicked: Vec<String> = {
             let picked = self.badges.picked.read().unwrap().clone();
-            self.badges
-                .badges
-                .read()
-                .unwrap()
-                .iter()
-                .filter(|b| !b.earned && !picked.contains(&b.campaign_id))
-                .map(|b| b.campaign_id.clone())
-                .collect()
+            let open = open_campaigns(&self.badges.badges.read().unwrap());
+            open.into_iter().filter(|id| !picked.contains(id)).collect()
         };
         for id in unpicked {
             if let Err(e) = self.set_badge_picked(&id, true) {
@@ -503,15 +524,13 @@ impl Miner {
                 *added.entry(a.campaign_id.clone()).or_default() += 1;
             }
             let tried = self.badges.auto_tried.lock().unwrap();
-            self.badges
-                .badges
-                .read()
-                .unwrap()
-                .iter()
-                .filter(|b| !b.earned && !covered.contains(&b.campaign_id))
-                .filter(|b| added.get(&b.campaign_id).copied().unwrap_or(0) < 2 * QUICK_ADD)
-                .filter(|b| tried.get(&b.campaign_id).map_or(true, |t| now - t > AUTO_ADD_RETRY_SECS))
-                .map(|b| (b.campaign_id.clone(), b.name.clone()))
+            let badges = self.badges.badges.read().unwrap();
+            open_campaigns(&badges)
+                .into_iter()
+                .filter(|id| !covered.contains(id))
+                .filter(|id| added.get(id).copied().unwrap_or(0) < 2 * QUICK_ADD)
+                .filter(|id| tried.get(id).map_or(true, |t| now - t > AUTO_ADD_RETRY_SECS))
+                .filter_map(|id| current(&badges, &id).map(|b| (id.clone(), b.name.clone())))
                 .collect()
         };
         for (id, name) in needs_channels {
@@ -602,17 +621,17 @@ impl Miner {
         Ok(added)
     }
 
-    /// Removes quick-added channels whose badge is earned or whose campaign has ended.
+    /// Removes quick-added channels whose campaign has every badge earned, or has ended.
     pub(super) fn prune_badge_channels(&self) {
-        let earned: HashSet<String> = self
-            .badges
-            .badges
-            .read()
-            .unwrap()
-            .iter()
-            .filter(|b| b.earned)
-            .map(|b| b.campaign_id.clone())
-            .collect();
+        let earned: HashSet<String> = {
+            let badges = self.badges.badges.read().unwrap();
+            let open = open_campaigns(&badges);
+            badges
+                .iter()
+                .filter(|b| !open.contains(&b.campaign_id))
+                .map(|b| b.campaign_id.clone())
+                .collect()
+        };
         let now = now();
         let done: Vec<(String, &str)> = self
             .badges
