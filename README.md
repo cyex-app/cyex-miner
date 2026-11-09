@@ -64,7 +64,7 @@ the web UI:
   ends or you untick it. Channels you added yourself are never removed this way.
   A campaign with several badges (e.g. for 30, 60 and 90 minutes) shows its next one, and a pick or added channel
   stays until the last is earned. Earned badges leave the list. The button next to the title counts the badges earned since the miner started;
-  click it to see them all in a window, as a list or a grid (which widens with the badges on large screens), with each one's art, game, the channel it was earned on (a link, kept by channel id through renames), the watch time it took
+  click it to see them all in a window, as a list or a grid (which widens with the badges on large screens), with each one's art, game (left out when Twitch doesn't say), the channel it was earned on (a link, kept by channel id through renames), the watch time it took
   and when.
 
 With `followers = true`, new follows are added to the end of the list on each start and unfollowed channels

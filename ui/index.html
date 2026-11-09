@@ -2049,7 +2049,7 @@ function earnedHtml(e) {
     ${image ? `<img src="${esc(image)}" alt="" width="56" height="56" loading="lazy">` : ICON.award}
     <span class="badge-text">
       <span class="name" title="${esc(e.name)}">${esc(e.name)}</span>
-      <span class="meta" title="${esc(e.game)}">${esc(e.game || "Any game")}</span>
+      ${e.game ? `<span class="meta" title="${esc(e.game)}">${esc(e.game)}</span>` : ""}
       <span class="meta">${channel}${fmt(e.minutes_required)} min</span>
     </span>
     <time datetime="${at.toISOString()}" >${fmtDate(at)}</time>
