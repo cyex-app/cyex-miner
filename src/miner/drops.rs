@@ -1,16 +1,26 @@
 //! Drop campaigns: tracks progress on the live channels and claims finished drops.
 
-use std::{fs, io::Write, sync::Arc, time::Duration};
+use std::{
+    fs,
+    io::Write,
+    sync::{Arc, Mutex, PoisonError},
+    time::Duration,
+};
 
 use anyhow::Result;
 use serde_json::{json, Value};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::Miner;
 use crate::{
     entities::drops::{Campaign, Drop},
+    twitch::merge_campaign_ids,
     utils::{now, random_between},
 };
+
+/// Seconds between campaign list reads, and the shorter wait when no campaign id was found.
+const CAMPAIGNS_EVERY: f64 = 30.0 * 60.0;
+const CAMPAIGNS_RETRY: f64 = 5.0 * 60.0;
 
 /// The badge debug file, next to the config.
 const BADGE_DEBUG_FILE: &str = "badge-debug.jsonl";
@@ -83,14 +93,39 @@ impl Miner {
         }
     }
 
-    async fn fetch_campaigns(&self) -> Result<Vec<Campaign>> {
-        let ids: Vec<String> = self
+    /// The campaigns to track, and whether no campaign id was found at all (worth trying again soon).
+    async fn fetch_campaigns(&self) -> Result<(Vec<Campaign>, bool)> {
+        let mut ids: Vec<String> = self
             .twitch
             .active_drop_campaigns()
             .await?
             .iter()
             .filter_map(|c| c["id"].as_str().map(str::to_string))
             .collect();
+        let dashboard = ids.len();
+        // Some accounts get no dashboard list: use the ids the live channels' reads found, and
+        // the inventory's campaigns in progress.
+        if ids.is_empty() {
+            let channels: Vec<Vec<String>> = self
+                .streamers()
+                .iter()
+                .map(|s| s.state().stream.campaigns_ids.clone())
+                .collect();
+            let inventory: Vec<String> = match self.twitch.inventory().await {
+                Ok(inv) => inv["dropCampaignsInProgress"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| c["id"].as_str().map(str::to_string))
+                    .collect(),
+                Err(e) => {
+                    debug!("Could not load the inventory for the campaign fallback: {e:#}");
+                    Vec::new()
+                }
+            };
+            ids = merge_campaign_ids(&channels, &inventory);
+        }
+        self.note_campaign_counts(dashboard, ids.len());
         let details = self.twitch.campaign_details(&ids).await?;
         // What each campaign gives, to see why a badge does or doesn't show (RUST_LOG=points_miner=debug).
         for c in &details {
@@ -111,7 +146,8 @@ impl Miner {
                 .collect();
             debug!("Drop campaign {}: {}", c["name"].as_str().unwrap_or("?"), rewards.join(", "));
         }
-        Ok(details
+        let retry_soon = ids.is_empty();
+        let campaigns = details
             .iter()
             .filter_map(Campaign::from_json)
             .filter(Campaign::dt_match)
@@ -119,7 +155,18 @@ impl Miner {
                 c.clear_drops();
                 (!c.drops.is_empty()).then_some(c)
             })
-            .collect())
+            .collect();
+        Ok((campaigns, retry_soon))
+    }
+
+    /// One line when the campaign counts change: dashboard ids, ids tracked after the fallback.
+    fn note_campaign_counts(&self, dashboard: usize, tracked: usize) {
+        static LAST: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(PoisonError::into_inner);
+        if *last != Some((dashboard, tracked)) {
+            *last = Some((dashboard, tracked));
+            info!("Drop campaigns: {dashboard} on the dashboard, {tracked} tracked.");
+        }
     }
 
     /// Updates drop progress from the inventory and claims whatever is ready.
@@ -165,14 +212,18 @@ impl Miner {
                 || self.auto_badges()
                 || streamers.iter().any(|s| s.settings.claim_drops);
             if !self.paused() && claims_drops {
-                if now() - last_refresh > 30.0 * 60.0 {
+                if now() - last_refresh > CAMPAIGNS_EVERY {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
                     self.refresh_event_badges().await;
                     match self.fetch_campaigns().await {
-                        Ok(c) => {
+                        Ok((c, retry_soon)) => {
                             self.set_badge_campaigns(&c);
                             campaigns = c;
+                            // No ids anywhere: the channel reads may not have run yet, look again soon.
+                            if retry_soon {
+                                last_refresh = now() - (CAMPAIGNS_EVERY - CAMPAIGNS_RETRY);
+                            }
                         }
                         Err(e) => warn!("Could not load drop campaigns: {e:#}"),
                     }

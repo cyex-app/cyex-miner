@@ -1,6 +1,6 @@
 //! Twitch GraphQL / HTTP client.
 
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{collections::{HashMap, HashSet}, sync::Mutex, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
@@ -91,6 +91,34 @@ fn parse_points_context(resp: &Value) -> Result<Option<PointsContext>> {
             .unwrap_or_default(),
         claim_id: points["availableClaim"]["id"].as_str().map(str::to_string),
     }))
+}
+
+/// The ACTIVE campaigns of a dashboard response. A user whose `dropCampaigns` is null or missing
+/// (some accounts get this, with no errors) has none to show; no user at all, or GQL errors,
+/// is a failed read: a failed query must not read as "no campaigns running".
+pub(crate) fn parse_active_campaigns(resp: &Value) -> Result<Vec<Value>> {
+    if !resp["errors"].is_null() || !resp["data"]["currentUser"].is_object() {
+        bail!("unexpected response: {resp}");
+    }
+    Ok(resp["data"]["currentUser"]["dropCampaigns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["status"].as_str() == Some("ACTIVE"))
+        .cloned()
+        .collect())
+}
+
+/// Campaign ids from the channels' reads, then the inventory's, each once, in first-seen order.
+pub(crate) fn merge_campaign_ids(channels: &[Vec<String>], inventory: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    channels
+        .iter()
+        .flatten()
+        .chain(inventory)
+        .filter(|id| seen.insert(id.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn parse_campaign_ids(resp: &Value) -> Vec<String> {
@@ -578,15 +606,7 @@ impl Twitch {
         let resp = self
             .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": false })))
             .await?;
-        // A failed query must not read as "no campaigns running".
-        let Some(campaigns) = resp["data"]["currentUser"]["dropCampaigns"].as_array() else {
-            bail!("unexpected response: {resp}");
-        };
-        Ok(campaigns
-            .iter()
-            .filter(|x| x["status"].as_str() == Some("ACTIVE"))
-            .cloned()
-            .collect())
+        parse_active_campaigns(&resp)
     }
 
     pub async fn campaign_details(&self, ids: &[String]) -> Result<Vec<Value>> {

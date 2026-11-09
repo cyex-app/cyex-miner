@@ -13,7 +13,8 @@ use crate::{
     pubsub::PubSubMessage,
     store::Store,
     twitch::{
-        parse_channel_card, parse_channel_id, parse_directory, parse_search, parse_stream_info, parse_watch_streak,
+        merge_campaign_ids, parse_active_campaigns, parse_channel_card, parse_channel_id, parse_directory,
+        parse_search, parse_stream_info, parse_watch_streak,
     },
 };
 
@@ -321,4 +322,29 @@ fn channel_topic_falls_back_to_topic_id() {
     let msg = PubSubMessage::parse(&raw).unwrap();
     assert_eq!(msg.channel_id, "42");
     assert_eq!(msg.timestamp_raw, "1700000000.5");
+}
+
+#[test]
+fn dashboard_with_null_campaigns_is_empty_not_an_error() {
+    let null = json!({"data":{"currentUser":{"__typename":"User","dropCampaigns":null,"id":"1"}}});
+    assert!(parse_active_campaigns(&null).unwrap().is_empty());
+    let missing = json!({"data":{"currentUser":{"id":"1"}}});
+    assert!(parse_active_campaigns(&missing).unwrap().is_empty());
+    // A failed query is still an error.
+    assert!(parse_active_campaigns(&json!({"data":{"currentUser":null}})).is_err());
+    assert!(parse_active_campaigns(&json!({"data":null})).is_err());
+    assert!(parse_active_campaigns(&json!({"errors":[{"message":"x"}],"data":{"currentUser":{"dropCampaigns":[]}}})).is_err());
+    let list = json!({"data":{"currentUser":{"dropCampaigns":[
+        {"id":"a","status":"ACTIVE"},{"id":"b","status":"EXPIRED"}]}}});
+    let active = parse_active_campaigns(&list).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0]["id"], "a");
+}
+
+#[test]
+fn campaign_ids_merge_once_in_first_seen_order() {
+    let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let channels = vec![v(&["a", "b"]), v(&[]), v(&["b", "c"])];
+    assert_eq!(merge_campaign_ids(&channels, &v(&["c", "d"])), v(&["a", "b", "c", "d"]));
+    assert!(merge_campaign_ids(&[], &[]).is_empty());
 }
