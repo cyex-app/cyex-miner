@@ -373,7 +373,10 @@ fn reward_campaigns_become_watch_time_badges() {
     assert_eq!(c.game_slug, "league-of-legends");
     // The category link isn't a channel; the one in the instructions is.
     assert_eq!(c.allowed_channels, vec![(String::new(), "samham".to_string())]);
-    let (drop, badge) = c.watch_badge_drop(&HashSet::new()).unwrap();
+    // Only a Twitch event badge counts; a game item (a Minecraft add-on) doesn't.
+    assert!(c.watch_badge_drop(&HashSet::new()).is_none());
+    let events: HashSet<String> = ["k/da fan".to_string()].into();
+    let (drop, badge) = c.watch_badge_drop(&events).unwrap();
     assert_eq!(drop.minutes_required, 30);
     assert_eq!(drop.id, "r1:w1");
     assert_eq!(badge.name, "K/DA Fan");
@@ -383,7 +386,7 @@ fn reward_campaigns_become_watch_time_badges() {
     // Subscription goals aren't for watch time.
     let mut subs = reward_campaign_json();
     subs["unlockRequirements"]["subsGoal"] = json!(1);
-    assert!(Campaign::from_reward_json(&subs).unwrap().watch_badge_drop(&HashSet::new()).is_none());
+    assert!(Campaign::from_reward_json(&subs).unwrap().watch_badge_drop(&events).is_none());
     // No game: any channel.
     let mut sitewide = reward_campaign_json();
     sitewide["game"] = Value::Null;
@@ -500,4 +503,27 @@ fn real_streamdatabase_pages() {
         assert_eq!((c.drops[0].minutes_required, c.game_id.as_str()), (minutes, game), "{file}");
         println!("{file}: {:?} {} {}", c.allowed_channels, c.game_slug, c.drops[0].minutes_required);
     }
+}
+
+#[test]
+fn event_badges_use_the_page_window() {
+    // catquery said Jordan x Space Jam ran until the 15th; the page says 20:25-21:59 UTC on the 13th.
+    let mut page = json!({
+        "objectives": [[{ "type": "twitch_watch", "minutes": 15, "days": null }]],
+        "categories": [], "channels": null,
+        "start_at_date": "2026-11-13", "start_at_time": "20:25",
+        "end_at_date": "2026-11-13", "end_at_time": "21:59"
+    });
+    let badge = json!({ "id": "j", "name": "J", "startAt": "2026-11-13T00:00:00.000Z", "endAt": "2026-11-15T23:59:59.999Z" });
+    let c = Campaign::from_event_badge(&badge, &next_data(&event_page(page.clone())).unwrap()).unwrap();
+    assert_eq!(c.start_at.to_rfc3339(), "2026-11-13T20:25:00+00:00");
+    assert_eq!(c.end_at.to_rfc3339(), "2026-11-13T21:59:59+00:00");
+    assert_eq!(c.drops[0].end_at, c.end_at);
+    // A date without a time runs to the end of that day; no date falls back to catquery.
+    page["end_at_time"] = Value::Null;
+    let c = Campaign::from_event_badge(&badge, &next_data(&event_page(page.clone())).unwrap()).unwrap();
+    assert_eq!(c.end_at.to_rfc3339(), "2026-11-14T00:00:00+00:00");
+    page["end_at_date"] = Value::Null;
+    let c = Campaign::from_event_badge(&badge, &next_data(&event_page(page)).unwrap()).unwrap();
+    assert_eq!(c.end_at.to_rfc3339(), "2026-11-15T23:59:59.999+00:00");
 }

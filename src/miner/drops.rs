@@ -223,7 +223,7 @@ impl Miner {
                 })
             })
             .collect();
-        info!("{} reward campaigns running, for watch time: {}", json.len(), if watch.is_empty() { "none".into() } else { watch.join(", ") });
+        info!("{} reward campaigns running, with a watch goal (badges among them count): {}", json.len(), if watch.is_empty() { "none".into() } else { watch.join(", ") });
         campaigns
     }
 

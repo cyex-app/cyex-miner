@@ -877,7 +877,8 @@ impl Miner {
             .filter_map(|(id, a)| {
                 if earned.contains(&a.campaign_id) {
                     Some((id.clone(), "badge earned"))
-                } else if now > a.ends_at {
+                } else if now > a.ends_at || (!games.is_empty() && !games.contains_key(&a.campaign_id)) {
+                    // Not listed anymore: ended early, or not a badge after all.
                     Some((id.clone(), "badge drop ended"))
                 } else {
                     gone(id, &a.campaign_id).then(|| (id.clone(), "it can't earn the badge right now"))
@@ -966,7 +967,8 @@ mod tests {
             }))
             .unwrap();
             c.allowed_channels = allowed;
-            Badge::from_campaign(&c, &HashMap::new()).remove(0)
+            let events = HashMap::from([("k/da fan".to_string(), String::new())]);
+            Badge::from_campaign(&c, &events).remove(0)
         };
         // Not listed among the channel's drops, which is fine for a reward campaign.
         let any = reward(Vec::new());

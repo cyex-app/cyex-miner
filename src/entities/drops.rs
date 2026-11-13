@@ -238,6 +238,22 @@ impl Campaign {
             .as_array()?
             .iter()
             .find_map(|a| Some((a, watch_minutes(&a["objectives"])?)))?;
+        // The page's own window is the exact one (Jordan x Space Jam ran 20:25-21:59 UTC while
+        // catquery said until two days later); catquery's is the fallback.
+        let page_time = |date: &str, time: &str| {
+            let date = availability[date].as_str()?;
+            let time = availability[time].as_str().unwrap_or("00:00");
+            chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M")
+                .ok()
+                .map(|t| t.and_utc())
+        };
+        let start_at = page_time("start_at_date", "start_at_time").unwrap_or(start_at);
+        let end_at = match page_time("end_at_date", "end_at_time") {
+            // A date without a time: the whole day.
+            Some(end) if availability["end_at_time"].is_null() => end + chrono::Duration::days(1),
+            Some(end) => end + chrono::Duration::seconds(59),
+            None => end_at,
+        };
         let game = &availability["categories"][0]["game"];
         let game_name = game["name"].as_str().unwrap_or_default().to_string();
         let image = badge["imageUrl"].as_str().unwrap_or_default().to_string();
@@ -318,7 +334,10 @@ impl Campaign {
                     id: format!("{id}:{reward_id}"),
                     name: reward_name.clone(),
                     benefit: reward_name,
-                    badge: Some(badge.clone()),
+                    // Most reward campaigns give game items (e.g. a Minecraft add-on), not badges:
+                    // a reward only counts as a badge when its name is a Twitch event badge's,
+                    // see `watch_badge_drops`.
+                    badge: None,
                     rewards: vec![badge],
                     required_subs: subs,
                     minutes_required: minutes,
