@@ -1,6 +1,7 @@
 //! Drop campaigns: tracks progress on the live channels and claims finished drops.
 
 use std::{
+    collections::HashSet,
     fs,
     io::Write,
     sync::{Arc, Mutex, PoisonError},
@@ -27,6 +28,24 @@ const CAMPAIGNS_RETRY: f64 = 5.0 * 60.0;
 const BADGE_DEBUG_FILE: &str = "badge-debug.jsonl";
 /// Past this size the file is moved to `badge-debug.jsonl.old` and a new one started.
 const BADGE_DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The drop campaigns followed by the reward and event badge campaigns. An event badge
+/// (`event:` id, from streamdatabase) that a Twitch campaign also gives is left out: Twitch's
+/// own campaign reports progress.
+pub(crate) fn with_event_badges(drops: &[Campaign], rewards: &[Campaign]) -> Vec<Campaign> {
+    let from_twitch: HashSet<String> = drops
+        .iter()
+        .chain(rewards.iter().filter(|c| !c.id.starts_with("event:")))
+        .flat_map(|c| &c.drops)
+        .flat_map(|d| &d.rewards)
+        .map(|r| r.name.trim().to_lowercase())
+        .collect();
+    drops
+        .iter()
+        .chain(rewards.iter().filter(|c| !(c.id.starts_with("event:") && from_twitch.contains(&c.name.trim().to_lowercase()))))
+        .cloned()
+        .collect()
+}
 
 impl Miner {
     /// Appends what Twitch sends about drops and reward campaigns to `BADGE_DEBUG_FILE` when it
@@ -265,10 +284,11 @@ impl Miner {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
                     self.refresh_event_badges().await;
-                    let rewards = self.fetch_reward_campaigns().await;
+                    let mut rewards = self.fetch_reward_campaigns().await;
+                    rewards.extend(self.event_campaigns());
                     match self.fetch_campaigns().await {
                         Ok((c, retry_soon)) => {
-                            self.set_badge_campaigns(&[c.as_slice(), &rewards].concat());
+                            self.set_badge_campaigns(&with_event_badges(&c, &rewards));
                             campaigns = c;
                             // No ids anywhere: the channel reads may not have run yet, look again soon.
                             if retry_soon {
@@ -279,7 +299,7 @@ impl Miner {
                             warn!("Could not load drop campaigns: {e:#}");
                             // Reward badges don't depend on the drop list; keep the known drop
                             // campaigns' badges by passing the last list along.
-                            self.set_badge_campaigns(&[campaigns.as_slice(), &rewards].concat());
+                            self.set_badge_campaigns(&with_event_badges(&campaigns, &rewards));
                         }
                     }
                     if self.config.badge_debug {

@@ -5,10 +5,10 @@ use serde_json::{json, Value};
 use crate::{
     config::{Config, EXAMPLE_CONFIG},
     entities::{
-        drops::{twitch_channel_logins, Campaign},
+        drops::{game_slug, next_data, twitch_channel_logins, Campaign},
         streamer::{ChatPresence, Source, Streamer, StreamerSettings},
     },
-    miner::{parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
+    miner::{with_event_badges, parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
@@ -407,4 +407,97 @@ fn finds_channel_links() {
     assert!(twitch_channel_logins("https://twitch.tv/directory/category/irl").is_empty());
     assert!(twitch_channel_logins("https://twitch.tv/drops").is_empty());
     assert!(twitch_channel_logins("no links").is_empty());
+}
+
+fn event_badge(id: &str, name: &str) -> Value {
+    json!({
+        "id": id, "name": name, "imageUrl": "https://static-cdn.jtvnw.net/badges/v1/x/3",
+        "startAt": "2020-01-01T00:00:00.000Z", "endAt": "2099-01-01T00:00:00.000Z", "free": true
+    })
+}
+
+/// A streamdatabase page as it embeds its data, with one availability.
+fn event_page(availability: Value) -> String {
+    let data = json!({ "props": { "pageProps": { "availabilities": [availability] } } });
+    format!(r#"<html><script id="__NEXT_DATA__" type="application/json">{data}</script><script>x</script></html>"#)
+}
+
+#[test]
+fn event_badges_come_from_their_streamdatabase_page() {
+    // As the K/DA Fan page has it: 30 minutes of League of Legends, any channel.
+    let html = event_page(json!({
+        "objectives": [[{ "type": "twitch_watch", "minutes": 30, "days": null }]],
+        "categories": [{ "game": { "id": "21779", "name": "League of Legends" }, "slug": null }],
+        "channels": null
+    }));
+    let c = Campaign::from_event_badge(&event_badge("kda-fan", "K/DA Fan"), &next_data(&html).unwrap()).unwrap();
+    assert!(c.reward && c.dt_match());
+    assert_eq!((c.id.as_str(), c.game_id.as_str(), c.game_slug.as_str()), ("event:kda-fan", "21779", "league-of-legends"));
+    assert!(c.allowed_channels.is_empty());
+    let (drop, badge) = c.watch_badge_drop(&HashSet::new()).unwrap();
+    assert_eq!((drop.minutes_required, badge.name.as_str()), (30, "K/DA Fan"));
+
+    // As the Jordan x Space Jam page has it: 15 minutes of IRL on samham.
+    let html = event_page(json!({
+        "objectives": [[{ "type": "twitch_watch", "minutes": 15, "days": null }]],
+        "categories": [{ "game": { "id": "509672", "name": "IRL" }, "slug": null }],
+        "channels": [{ "user": { "id": "54051059", "login": "samham" }, "stream": null }]
+    }));
+    let c = Campaign::from_event_badge(&event_badge("jordan", "Jordan x Space Jam"), &next_data(&html).unwrap()).unwrap();
+    assert_eq!(c.allowed_channels, vec![("54051059".to_string(), "samham".to_string())]);
+    assert_eq!(c.game_slug, "irl");
+
+    // Not for watch time alone, or not filled in yet: no campaign.
+    for objectives in [
+        json!([[{ "type": "twitch_subscribe", "minutes": null, "days": null }]]),
+        json!([[{ "type": "twitch_watch", "minutes": 15, "days": 3 }]]),
+        json!([[{ "type": "twitch_watch", "minutes": null, "days": null }]]),
+        json!([]),
+    ] {
+        let page = next_data(&event_page(json!({ "objectives": objectives, "categories": [], "channels": null }))).unwrap();
+        assert!(Campaign::from_event_badge(&event_badge("x", "X"), &page).is_none(), "{objectives}");
+    }
+    // The quickest way that's watching alone wins.
+    let page = next_data(&event_page(json!({ "objectives": [
+        [{ "type": "twitch_watch", "minutes": 60, "days": null }],
+        [{ "type": "twitch_watch", "minutes": 20, "days": null }, { "type": "twitch_cheer", "minutes": null, "days": null }],
+        [{ "type": "twitch_watch", "minutes": 45, "days": null }]
+    ], "categories": [], "channels": null }))).unwrap();
+    assert_eq!(Campaign::from_event_badge(&event_badge("x", "X"), &page).unwrap().drops[0].minutes_required, 45);
+    assert!(next_data("<html>no data</html>").is_none());
+}
+
+#[test]
+fn makes_directory_slugs() {
+    assert_eq!(game_slug("League of Legends"), "league-of-legends");
+    assert_eq!(game_slug("IRL"), "irl");
+    assert_eq!(game_slug("Counter-Strike"), "counter-strike");
+    assert_eq!(game_slug("Tom Clancy's Rainbow Six Siege"), "tom-clancy-s-rainbow-six-siege");
+}
+
+#[test]
+fn event_badges_twitch_already_gives_are_left_out() {
+    let page = next_data(&event_page(json!({
+        "objectives": [[{ "type": "twitch_watch", "minutes": 30, "days": null }]],
+        "categories": [], "channels": null
+    })))
+    .unwrap();
+    let event = Campaign::from_event_badge(&event_badge("kda-fan", "K/DA Fan"), &page).unwrap();
+    let other = Campaign::from_event_badge(&event_badge("other", "Other"), &page).unwrap();
+    let reward = Campaign::from_reward_json(&reward_campaign_json()).unwrap();
+    let ids = |v: Vec<Campaign>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
+    assert_eq!(ids(with_event_badges(&[], &[reward.clone(), event.clone(), other.clone()])), ["r1", "event:other"]);
+    assert_eq!(ids(with_event_badges(&[], &[event, other])), ["event:kda-fan", "event:other"]);
+}
+
+/// The real pages, when saved to `$EVENT_PAGES_DIR` (kda.html, jordan.html).
+#[test]
+fn real_streamdatabase_pages() {
+    let Ok(dir) = std::env::var("EVENT_PAGES_DIR") else { return };
+    for (file, minutes, game) in [("kda.html", 30, "21779"), ("jordan.html", 15, "509672")] {
+        let html = std::fs::read_to_string(format!("{dir}/{file}")).unwrap();
+        let c = Campaign::from_event_badge(&event_badge("x", "X"), &next_data(&html).unwrap()).unwrap();
+        assert_eq!((c.drops[0].minutes_required, c.game_id.as_str()), (minutes, game), "{file}");
+        println!("{file}: {:?} {} {}", c.allowed_channels, c.game_slug, c.drops[0].minutes_required);
+    }
 }

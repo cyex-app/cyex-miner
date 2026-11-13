@@ -38,6 +38,8 @@ pub use predictions::{PredictionSettings, PredictionsView};
 pub(crate) use predictions::{pick as pick_outcome, Outcome, Strategy};
 #[cfg(test)]
 pub(crate) use badges::parse_event_badges;
+#[cfg(test)]
+pub(crate) use drops::with_event_badges;
 
 /// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
 const PRIORITY_KEY: &str = "priority";

@@ -179,7 +179,110 @@ pub(crate) fn twitch_channel_logins(text: &str) -> Vec<String> {
     logins
 }
 
+/// The page data a Next.js page embeds (`<script id="__NEXT_DATA__">`), as JSON.
+pub(crate) fn next_data(html: &str) -> Option<Value> {
+    let start = html.find("id=\"__NEXT_DATA__\"")?;
+    let body = &html[start..];
+    let body = &body[body.find('>')? + 1..];
+    serde_json::from_str(&body[..body.find("</script>")?]).ok()
+}
+
+/// A Twitch directory slug from a category name: "League of Legends" -> "league-of-legends".
+pub(crate) fn game_slug(name: &str) -> String {
+    let mut slug = String::new();
+    for c in name.to_lowercase().chars() {
+        if c.is_alphanumeric() {
+            slug.push(c);
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
+/// The minutes to watch in one go for a streamdatabase availability's `objectives`, a list of
+/// alternatives that each list steps. Only alternatives made of watching alone count (no
+/// subscriptions, cheers or watching on several days); the quickest one wins.
+fn watch_minutes(objectives: &Value) -> Option<i64> {
+    objectives
+        .as_array()?
+        .iter()
+        .filter_map(|steps| {
+            let steps = steps.as_array().filter(|s| !s.is_empty())?;
+            let minutes: Option<Vec<i64>> = steps
+                .iter()
+                .map(|s| {
+                    let days = s["days"].as_i64().unwrap_or(0);
+                    (s["type"].as_str() == Some("twitch_watch") && days <= 1)
+                        .then(|| s["minutes"].as_i64())
+                        .flatten()
+                        .filter(|m| *m > 0)
+                })
+                .collect();
+            minutes?.into_iter().max()
+        })
+        .min()
+}
+
 impl Campaign {
+    /// A free Twitch event badge from catquery's list (`badge`: id, name, imageUrl, startAt,
+    /// endAt), earned as its streamdatabase page (`page`, the page's `__NEXT_DATA__`) describes:
+    /// watch N minutes in a category, on any channel or the channels it names. Twitch sends these
+    /// as neither drops nor reward campaigns, so they're farmed like reward campaigns.
+    pub fn from_event_badge(badge: &Value, page: &Value) -> Option<Self> {
+        let set_id = badge["id"].as_str()?;
+        let name = badge["name"].as_str()?.to_string();
+        let start_at = parse_dt(&badge["startAt"])?;
+        let end_at = parse_dt(&badge["endAt"])?;
+        let (availability, minutes) = page["props"]["pageProps"]["availabilities"]
+            .as_array()?
+            .iter()
+            .find_map(|a| Some((a, watch_minutes(&a["objectives"])?)))?;
+        let game = &availability["categories"][0]["game"];
+        let game_name = game["name"].as_str().unwrap_or_default().to_string();
+        let image = badge["imageUrl"].as_str().unwrap_or_default().to_string();
+        let reward = BadgeReward { benefit_id: set_id.to_string(), name: name.clone(), image };
+        let drop = Drop {
+            id: format!("event:{set_id}"),
+            name: name.clone(),
+            benefit: name.clone(),
+            badge: Some(reward.clone()),
+            rewards: vec![reward],
+            required_subs: 0,
+            minutes_required: minutes,
+            has_preconditions_met: None,
+            current_minutes_watched: 0,
+            drop_instance_id: None,
+            is_claimed: false,
+            is_claimable: false,
+            is_printable: false,
+            percentage_progress: 0,
+            start_at,
+            end_at,
+        };
+        Some(Self {
+            id: format!("event:{set_id}"),
+            game_id: game["id"].as_str().unwrap_or_default().to_string(),
+            game_slug: availability["categories"][0]["slug"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| game_slug(&game_name)),
+            game_name,
+            name,
+            allowed_channels: availability["channels"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| Some((c["user"]["id"].as_str()?.to_string(), c["user"]["login"].as_str()?.to_lowercase())))
+                .collect(),
+            in_inventory: false,
+            start_at,
+            end_at,
+            drops: vec![drop],
+            reward: true,
+        })
+    }
+
     /// A reward campaign from the dashboard's `rewardCampaignsAvailableToUser`: "watch N minutes
     /// of a category (or a channel) for a badge". Each reward becomes a drop with that goal.
     /// Channels it names in its links become its allowed channels, with ids still to look up.

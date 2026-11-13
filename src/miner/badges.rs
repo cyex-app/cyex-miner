@@ -202,6 +202,10 @@ pub(super) struct BadgeState {
     earned: Mutex<Vec<EarnedBadge>>,
     /// Reward badges watched to their goal, by drop id, see `REWARD_DONE_KEY`.
     reward_done: Mutex<HashSet<String>>,
+    /// Running event badges for watch time, see `load_event_campaigns`.
+    event_campaigns: RwLock<Vec<Campaign>>,
+    /// Streamdatabase pages that gave a watch goal, by badge id.
+    event_pages: Mutex<HashMap<String, Value>>,
 }
 
 impl BadgeState {
@@ -216,6 +220,8 @@ impl BadgeState {
             auto_tried: Mutex::new(HashMap::new()),
             earned: Mutex::new(Vec::new()),
             reward_done: Mutex::new(serde_json::from_str(&read(REWARD_DONE_KEY)).unwrap_or_default()),
+            event_campaigns: RwLock::new(Vec::new()),
+            event_pages: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -353,12 +359,87 @@ impl Miner {
     pub(super) async fn refresh_event_badges(&self) {
         let loaded = async {
             let resp = self.twitch.http().get(EVENT_BADGES_URL).send().await?.error_for_status()?;
-            Ok::<_, anyhow::Error>(parse_event_badges(&resp.json::<Value>().await?, now()))
+            Ok::<_, anyhow::Error>(resp.json::<Value>().await?)
         };
         match loaded.await {
-            Ok(events) => *self.badges.events.write().unwrap() = events,
+            Ok(resp) => {
+                *self.badges.events.write().unwrap() = parse_event_badges(&resp, now());
+                self.load_event_campaigns(&resp).await;
+            }
             Err(e) => warn!("Could not load the event badge list: {e:#}"),
         }
+    }
+
+    /// Turns the running free event badges into campaigns, from their streamdatabase pages (what
+    /// to watch, where). Twitch sends some global badges (e.g. "watch 30 minutes of League of
+    /// Legends") as neither drops nor reward campaigns, so this is the only way to see them.
+    /// Pages that gave a watch goal are kept; the others are read again next time, as the
+    /// page may be filled in later.
+    async fn load_event_campaigns(&self, resp: &Value) {
+        let now = now();
+        let running: Vec<&Value> = resp["badges"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|b| b["free"].as_bool() == Some(true))
+            .filter(|b| {
+                let at = |k: &str| b[k].as_str().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+                at("startAt").is_none_or(|s| s.timestamp() as f64 <= now)
+                    && at("endAt").is_some_and(|e| e.timestamp() as f64 > now)
+            })
+            .collect();
+        let mut campaigns = Vec::new();
+        let mut unknown = Vec::new();
+        for badge in running {
+            let (Some(id), Some(url)) = (badge["id"].as_str(), badge["streamdatabaseUrl"].as_str()) else {
+                continue;
+            };
+            let cached = self.badges.event_pages.lock().unwrap().get(id).cloned();
+            let page = match cached {
+                Some(page) => Some(page),
+                None => match self.load_event_page(url).await {
+                    Ok(page) => page,
+                    Err(e) => {
+                        warn!("Could not read how to earn the {} badge: {e:#}", badge["name"]);
+                        None
+                    }
+                },
+            };
+            match page.as_ref().and_then(|p| Campaign::from_event_badge(badge, p)) {
+                Some(c) => {
+                    self.badges.event_pages.lock().unwrap().insert(id.to_string(), page.unwrap_or_default());
+                    campaigns.push(c);
+                }
+                None => unknown.push(badge["name"].as_str().unwrap_or(id).to_string()),
+            }
+        }
+        let found: Vec<String> = campaigns
+            .iter()
+            .map(|c| {
+                let place = match (c.allowed_channels.first(), c.game_name.as_str()) {
+                    (Some((_, login)), _) => login.clone(),
+                    (None, "") => "any channel".to_string(),
+                    (None, game) => game.to_string(),
+                };
+                format!("{} ({} min, {place})", c.name, c.drops[0].minutes_required)
+            })
+            .collect();
+        info!(
+            "Event badges for watch time: {}{}",
+            if found.is_empty() { "none".to_string() } else { found.join(", ") },
+            if unknown.is_empty() { String::new() } else { format!("; not for watch time or not described yet: {}", unknown.join(", ")) }
+        );
+        *self.badges.event_campaigns.write().unwrap() = campaigns;
+    }
+
+    async fn load_event_page(&self, url: &str) -> Result<Option<Value>> {
+        let html = self.twitch.http().get(url).send().await?.error_for_status()?.text().await?;
+        Ok(crate::entities::drops::next_data(&html))
+    }
+
+    /// The event badges for watch time found by `refresh_event_badges`.
+    pub(super) fn event_campaigns(&self) -> Vec<Campaign> {
+        self.badges.event_campaigns.read().unwrap().clone()
     }
 
     /// Adds badge campaigns the drops inventory has in progress but the campaign list doesn't.
@@ -402,6 +483,14 @@ impl Miner {
             .flatten()
             .filter_map(|d| d["id"].as_str())
             .collect();
+        // Event badges (from streamdatabase) have no Twitch id: one the inventory has a reward
+        // of the same name for is already owned, e.g. from a drop campaign.
+        let earned_names: HashSet<String> = inventory["gameEventDrops"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d["name"].as_str().map(|n| n.trim().to_lowercase()))
+            .collect();
         let in_progress = inventory["dropCampaignsInProgress"].as_array();
         for b in self.badges.badges.write().unwrap().iter_mut() {
             let (campaign_id, drop_id) = (b.campaign_id.as_str(), b.drop_id.as_str());
@@ -412,7 +501,8 @@ impl Miner {
                 .flat_map(|c| c["timeBasedDrops"].as_array().into_iter().flatten())
                 .find(|d| d["id"].as_str() == Some(drop_id))
                 .map(|d| &d["self"]);
-            let mut done = earned.contains(b.benefit_id.as_str());
+            let mut done = earned.contains(b.benefit_id.as_str())
+                || (b.campaign_id.starts_with("event:") && earned_names.contains(&b.name.trim().to_lowercase()));
             if let Some(p) = progress {
                 b.minutes_watched = p["currentMinutesWatched"].as_i64().unwrap_or(b.minutes_watched);
                 done |= p["isClaimed"].as_bool() == Some(true);
