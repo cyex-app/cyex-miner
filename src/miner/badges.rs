@@ -18,7 +18,10 @@ use tracing::{info, warn};
 
 use super::Miner;
 use crate::{
-    entities::{drops::Campaign, streamer::Source},
+    entities::{
+        drops::Campaign,
+        streamer::{Source, Streamer},
+    },
     priority::Priority,
     store::Store,
     utils::now,
@@ -36,6 +39,14 @@ const AUTO_KEY: &str = "badges_auto";
 const AUTO_ADD_RETRY_SECS: f64 = 30.0 * 60.0;
 /// A quick-added channel offline this long is removed, making room for live ones.
 const BADGE_CHANNEL_OFFLINE_SECS: f64 = 10.0 * 60.0;
+/// `meta` key for the reward badges (by drop id) watched to their goal. Twitch doesn't report
+/// them back, so this keeps them from being watched again after a restart.
+const REWARD_DONE_KEY: &str = "reward_badges_done";
+/// Minutes watched past a reward badge's goal before it counts as earned, as Twitch's count lags.
+const REWARD_MARGIN_MINUTES: f64 = 5.0;
+/// Twitch's "Special Events" categories: a campaign filed under one is earned on its channels
+/// whatever they stream (TwitchDropsMiner treats them the same way).
+const SPECIAL_GAME_IDS: [&str; 2] = ["509663", "509672"];
 
 /// A badge drop as the web UI shows it.
 #[derive(Debug, Clone, Serialize)]
@@ -89,6 +100,11 @@ struct Badge {
     seen_unearned: bool,
     /// Found in the drops inventory but not in the campaign list; kept until it ends.
     from_inventory: bool,
+    /// From a reward campaign: earned on live channels in its game (or the channels it names),
+    /// whatever drops they list. Its minutes are counted here.
+    reward: bool,
+    /// Minutes watched for a reward badge, counted by the miner.
+    reward_minutes: f64,
 }
 
 impl Badge {
@@ -119,9 +135,31 @@ impl Badge {
                     earned: false,
                     seen_unearned: false,
                     from_inventory: false,
+                    reward: c.reward,
+                    reward_minutes: 0.0,
                 }
             })
             .collect()
+    }
+
+    /// Whether a channel streaming `game_id` counts for the badge's game. A campaign without a
+    /// game, or in a Special Events category, counts on any game.
+    fn game_matches(&self, game_id: Option<&str>) -> bool {
+        self.game_id.is_empty()
+            || SPECIAL_GAME_IDS.contains(&self.game_id.as_str())
+            || game_id == Some(self.game_id.as_str())
+    }
+
+    /// Whether a live channel can earn the badge right now. Drop campaigns need the channel to
+    /// list the campaign among its drops; reward campaigns aren't listed there, so they go by
+    /// game and by the channels they name.
+    fn earnable_on(&self, channel_id: &str, game_id: Option<&str>, campaign_ids: &[String]) -> bool {
+        let channel_ok = if self.reward {
+            self.allowed.is_empty() || self.allowed.iter().any(|(id, _)| id == channel_id)
+        } else {
+            campaign_ids.contains(&self.campaign_id)
+        };
+        channel_ok && self.game_matches(game_id)
     }
 }
 
@@ -162,6 +200,8 @@ pub(super) struct BadgeState {
     auto_tried: Mutex<HashMap<String, f64>>,
     /// Badges earned since the miner started, oldest first.
     earned: Mutex<Vec<EarnedBadge>>,
+    /// Reward badges watched to their goal, by drop id, see `REWARD_DONE_KEY`.
+    reward_done: Mutex<HashSet<String>>,
 }
 
 impl BadgeState {
@@ -175,6 +215,7 @@ impl BadgeState {
             auto: AtomicBool::new(read(AUTO_KEY) == "1"),
             auto_tried: Mutex::new(HashMap::new()),
             earned: Mutex::new(Vec::new()),
+            reward_done: Mutex::new(serde_json::from_str(&read(REWARD_DONE_KEY)).unwrap_or_default()),
         }
     }
 }
@@ -255,6 +296,7 @@ impl Miner {
     /// campaigns that are no longer running are dropped.
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
         let events = self.badges.events.read().unwrap().clone();
+        let done = self.badges.reward_done.lock().unwrap().clone();
         let now = now();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
@@ -267,10 +309,12 @@ impl Miner {
                         b.minutes_watched = old.minutes_watched;
                         b.earned = old.earned;
                         b.seen_unearned = old.seen_unearned;
+                        b.reward_minutes = old.reward_minutes;
                         if b.game.is_empty() {
                             b.game = old.game.clone();
                         }
                     }
+                    b.earned |= b.reward && done.contains(&b.drop_id);
                     b
                 })
                 .collect();
@@ -405,7 +449,7 @@ impl Miner {
 
     /// Marks the live channels that can earn a picked badge right now, for the BADGES rule.
     pub(super) fn update_badge_targets(&self) {
-        let targets: Vec<(String, String)> = {
+        let targets: Vec<Badge> = {
             let picked = self.badges.picked.read().unwrap().clone();
             self.badges
                 .badges
@@ -413,18 +457,80 @@ impl Miner {
                 .unwrap()
                 .iter()
                 .filter(|b| !b.earned && picked.contains(&b.campaign_id))
-                .map(|b| (b.campaign_id.clone(), b.game_id.clone()))
+                .cloned()
                 .collect()
         };
         for s in self.streamers() {
             let mut st = s.state();
             let game = st.stream.game.as_ref().map(|g| g.id.clone());
             let eligible = st.is_online
-                && targets.iter().any(|(campaign_id, game_id)| {
-                    game.as_ref() == Some(game_id) && st.stream.campaigns_ids.contains(campaign_id)
-                });
+                && targets
+                    .iter()
+                    .any(|b| b.earnable_on(&s.channel_id, game.as_deref(), &st.stream.campaigns_ids));
             st.badge_drop = eligible;
         }
+    }
+
+    /// Counts minutes watched on a channel toward the picked reward badges it can earn, which
+    /// Twitch reports no progress for. One watched past its goal (plus a margin) counts as earned.
+    pub(super) fn count_reward_minutes(&self, s: &Streamer, minutes: f64) {
+        if minutes <= 0.0 {
+            return;
+        }
+        let (game, campaign_ids) = {
+            let st = s.state();
+            if !st.badge_drop {
+                return;
+            }
+            (st.stream.game.as_ref().map(|g| g.id.clone()), st.stream.campaigns_ids.clone())
+        };
+        let picked = self.badges.picked.read().unwrap().clone();
+        let mut newly = Vec::new();
+        for b in self.badges.badges.write().unwrap().iter_mut() {
+            if !b.reward || b.earned || !picked.contains(&b.campaign_id) {
+                continue;
+            }
+            if !b.earnable_on(&s.channel_id, game.as_deref(), &campaign_ids) {
+                continue;
+            }
+            b.reward_minutes += minutes;
+            b.minutes_watched = (b.reward_minutes.floor() as i64).min(b.minutes_required);
+            if b.reward_minutes >= b.minutes_required as f64 + REWARD_MARGIN_MINUTES {
+                b.earned = true;
+                newly.push(EarnedBadge {
+                    campaign_id: b.campaign_id.clone(),
+                    name: b.name.clone(),
+                    image: b.image.clone(),
+                    game: b.game.clone(),
+                    minutes_required: b.minutes_required,
+                    earned_at: now(),
+                    channel_id: Some(s.channel_id.clone()),
+                    channel: Some(s.username.clone()),
+                });
+            }
+        }
+        if newly.is_empty() {
+            return;
+        }
+        let json = {
+            let badges = self.badges.badges.read().unwrap();
+            let mut done = self.badges.reward_done.lock().unwrap();
+            // Ended ones aren't needed anymore.
+            done.retain(|id| badges.iter().any(|b| b.drop_id == *id));
+            done.extend(badges.iter().filter(|b| b.reward && b.earned).map(|b| b.drop_id.clone()));
+            serde_json::to_string(&*done).unwrap_or_default()
+        };
+        if let Err(e) = self.store.set_meta(REWARD_DONE_KEY, &json) {
+            warn!("Could not save the watched reward badges: {e:#}");
+        }
+        for e in &newly {
+            self.event(format!(
+                "Watched {} minutes on {} for the {} badge; Twitch gives it from its own count",
+                e.minutes_required, s.username, e.name
+            ));
+        }
+        self.badges.earned.lock().unwrap().extend(newly);
+        self.update_badge_targets();
     }
 
     /// Picks or unpicks a badge. Picking one turns the BADGES rule on if it was off; unpicking one
@@ -509,13 +615,12 @@ impl Miner {
         }
         self.pick_all_badges();
         let now = now();
-        let games: HashMap<String, String> = {
+        let open: Vec<Badge> = {
             let badges = self.badges.badges.read().unwrap();
-            badges.iter().map(|b| (b.campaign_id.clone(), b.game_id.clone())).collect()
+            badges.iter().filter(|b| !b.earned).cloned().collect()
         };
         let needs_channels: Vec<(String, String)> = {
-            // Campaigns some live channel in the list can earn right now: on the campaign and
-            // playing its game, like `update_badge_targets`.
+            // Campaigns some live channel in the list can earn right now, like `update_badge_targets`.
             let covered: HashSet<String> = self
                 .streamers()
                 .iter()
@@ -523,11 +628,9 @@ impl Miner {
                     let st = s.state();
                     let game = st.stream.game.as_ref().map(|g| g.id.clone());
                     st.is_online.then(|| {
-                        st.stream
-                            .campaigns_ids
-                            .iter()
-                            .filter(|id| games.get(*id).is_some_and(|g| game.as_ref() == Some(g)))
-                            .cloned()
+                        open.iter()
+                            .filter(|b| b.earnable_on(&s.channel_id, game.as_deref(), &st.stream.campaigns_ids))
+                            .map(|b| b.campaign_id.clone())
                             .collect::<Vec<_>>()
                     })
                 })
@@ -586,19 +689,25 @@ impl Miner {
                 .zip(overview)
                 .filter_map(|((id, login), (_, info))| {
                     let info = info.ok().flatten()?;
-                    (info.game.as_ref()?.id == badge.game_id).then(|| (id.clone(), login.clone(), info.viewers))
+                    let game = info.game.as_ref().map(|g| g.id.as_str());
+                    badge.game_matches(game).then(|| (id.clone(), login.clone(), info.viewers))
                 })
                 .collect()
         };
-        // Drops have to be on for this campaign on the stream itself.
-        let ids: Vec<String> = streaming.iter().map(|(id, _, _)| id.clone()).collect();
-        let campaigns = self.twitch.campaign_ids_for_channels(&ids).await;
-        let mut live: Vec<(String, String, i64)> = streaming
-            .into_iter()
-            .zip(campaigns)
-            .filter(|(_, ids)| ids.contains(&badge.campaign_id))
-            .map(|(channel, _)| channel)
-            .collect();
+        // Drops have to be on for this campaign on the stream itself. Reward campaigns aren't
+        // listed among a channel's drops; streaming the game is enough.
+        let mut live: Vec<(String, String, i64)> = if badge.reward {
+            streaming
+        } else {
+            let ids: Vec<String> = streaming.iter().map(|(id, _, _)| id.clone()).collect();
+            let campaigns = self.twitch.campaign_ids_for_channels(&ids).await;
+            streaming
+                .into_iter()
+                .zip(campaigns)
+                .filter(|(_, ids)| ids.contains(&badge.campaign_id))
+                .map(|(channel, _)| channel)
+                .collect()
+        };
 
         // Leave channels already in the database (followed ones may not be loaded) and removed ones alone.
         let known: HashSet<String> = self.store.channels()?.into_iter().map(|r| r.id).collect();
@@ -647,7 +756,7 @@ impl Miner {
     /// that can't earn it anymore (offline for a while, or playing another game), so they don't
     /// count toward the limit and fresh channels can be added in their place.
     pub(super) fn prune_badge_channels(&self) {
-        let (earned, games): (HashSet<String>, HashMap<String, String>) = {
+        let (earned, games): (HashSet<String>, HashMap<String, Badge>) = {
             let badges = self.badges.badges.read().unwrap();
             let open = open_campaigns(&badges);
             let earned = badges
@@ -655,7 +764,7 @@ impl Miner {
                 .filter(|b| !open.contains(&b.campaign_id))
                 .map(|b| b.campaign_id.clone())
                 .collect();
-            let games = badges.iter().map(|b| (b.campaign_id.clone(), b.game_id.clone())).collect();
+            let games = badges.iter().map(|b| (b.campaign_id.clone(), b.clone())).collect();
             (earned, games)
         };
         let now = now();
@@ -669,7 +778,7 @@ impl Miner {
                 return now - st.offline_at > BADGE_CHANNEL_OFFLINE_SECS;
             }
             let game = st.stream.game.as_ref().map(|g| g.id.as_str());
-            games.get(campaign_id).is_some_and(|id| !id.is_empty() && game.is_some_and(|g| g != id))
+            game.is_some() && games.get(campaign_id).is_some_and(|b| !b.game_matches(game))
         };
         // A copy, so no channel state is locked while the list is.
         let added = self.badges.added.lock().unwrap().clone();
@@ -717,5 +826,64 @@ impl Miner {
         if let Err(e) = self.store.set_meta(ADDED_KEY, &json) {
             warn!("Could not save the quick-added badge channels: {e:#}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn drop_campaign(game_id: &str) -> Campaign {
+        Campaign::from_json(&json!({
+            "id": "c1",
+            "game": { "id": game_id, "displayName": "Special Events" },
+            "startAt": "2020-01-01T00:00:00Z",
+            "endAt": "2099-01-01T00:00:00Z",
+            "timeBasedDrops": [{
+                "id": "d1", "requiredMinutesWatched": 15, "requiredSubs": 0,
+                "startAt": "2020-01-01T00:00:00Z", "endAt": "2099-01-01T00:00:00Z",
+                "benefitEdges": [{ "benefit": { "id": "b1", "name": "Jordan", "distributionType": "BADGE" } }]
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn special_events_campaigns_count_on_any_game() {
+        let on = vec!["c1".to_string()];
+        let special = &Badge::from_campaign(&drop_campaign("509663"), &HashMap::new())[0];
+        // The channel streams IRL; the campaign is filed under Special Events.
+        assert!(special.earnable_on("ch", Some("509672x"), &on));
+        assert!(special.earnable_on("ch", Some("509660"), &on));
+        // It still has to list the campaign among its drops.
+        assert!(!special.earnable_on("ch", Some("509660"), &[]));
+
+        let game = &Badge::from_campaign(&drop_campaign("21779"), &HashMap::new())[0];
+        assert!(game.earnable_on("ch", Some("21779"), &on));
+        assert!(!game.earnable_on("ch", Some("509660"), &on));
+    }
+
+    #[test]
+    fn reward_badges_go_by_game_and_named_channels() {
+        let reward = |allowed: Vec<(String, String)>| {
+            let mut c = Campaign::from_reward_json(&json!({
+                "id": "r1", "startsAt": "2020-01-01T00:00:00Z", "endsAt": "2099-01-01T00:00:00Z",
+                "game": { "id": "21779" },
+                "unlockRequirements": { "subsGoal": 0, "minuteWatchedGoal": 30 },
+                "rewards": [{ "id": "w1", "name": "K/DA Fan" }]
+            }))
+            .unwrap();
+            c.allowed_channels = allowed;
+            Badge::from_campaign(&c, &HashMap::new()).remove(0)
+        };
+        // Not listed among the channel's drops, which is fine for a reward campaign.
+        let any = reward(Vec::new());
+        assert!(any.earnable_on("ch", Some("21779"), &[]));
+        assert!(!any.earnable_on("ch", Some("1"), &[]));
+        let named = reward(vec![("42".into(), "samham".into())]);
+        assert!(named.earnable_on("42", Some("21779"), &[]));
+        assert!(!named.earnable_on("ch", Some("21779"), &[]));
     }
 }

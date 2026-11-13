@@ -999,10 +999,11 @@ impl Miner {
             return Ok(());
         }
 
-        let (lines, check_streak) = {
+        let (lines, check_streak, added) = {
             let mut st = streamer.state();
             let before = st.stream.minute_watched;
-            st.session_minutes += st.stream.update_minute_watched();
+            let added = st.stream.update_minute_watched();
+            st.session_minutes += added;
             // Once a minute while a streak is pending, see whether Twitch's count went up.
             let check_streak = st.stream.watch_streak_missing
                 && st.stream.streak_at_start.is_some()
@@ -1023,8 +1024,9 @@ impl Miner {
                     }
                 }
             }
-            (lines, check_streak)
+            (lines, check_streak, added)
         };
+        self.count_reward_minutes(streamer, added);
         for line in lines {
             self.event(line);
         }

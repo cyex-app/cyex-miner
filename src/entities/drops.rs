@@ -150,9 +150,106 @@ pub struct Campaign {
     pub start_at: DateTime<Utc>,
     pub end_at: DateTime<Utc>,
     pub drops: Vec<Drop>,
+    /// A reward campaign (Twitch's global badges for watching a category), not a drop campaign:
+    /// channels don't list it among their drops, and the inventory has no progress for it.
+    pub reward: bool,
+}
+
+/// Paths on twitch.tv that aren't channels.
+const NOT_CHANNELS: &[&str] = &[
+    "directory", "drops", "inventory", "settings", "p", "search", "subs", "turbo", "prime", "downloads",
+    "jobs", "store", "videos", "event", "events", "wallet", "friends", "subscriptions", "messages",
+];
+
+/// The channel logins `twitch.tv/<login>` links in `text` point to, each once.
+pub(crate) fn twitch_channel_logins(text: &str) -> Vec<String> {
+    let mut logins = Vec::new();
+    for (i, _) in text.match_indices("twitch.tv/") {
+        let login: String = text[i + "twitch.tv/".len()..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_lowercase();
+        // A path going on (`/directory/...`) or a too short name isn't a channel page.
+        let rest = &text[i + "twitch.tv/".len() + login.len()..];
+        if login.len() >= 3 && !rest.starts_with('/') && !NOT_CHANNELS.contains(&login.as_str()) && !logins.contains(&login) {
+            logins.push(login);
+        }
+    }
+    logins
 }
 
 impl Campaign {
+    /// A reward campaign from the dashboard's `rewardCampaignsAvailableToUser`: "watch N minutes
+    /// of a category (or a channel) for a badge". Each reward becomes a drop with that goal.
+    /// Channels it names in its links become its allowed channels, with ids still to look up.
+    pub fn from_reward_json(v: &Value) -> Option<Self> {
+        let id = v["id"].as_str()?.to_string();
+        let start_at = parse_dt(&v["startsAt"]).or_else(|| parse_dt(&v["startAt"]))?;
+        let end_at = parse_dt(&v["endsAt"]).or_else(|| parse_dt(&v["endAt"]))?;
+        let needs = &v["unlockRequirements"];
+        let minutes = needs["minuteWatchedGoal"].as_i64().unwrap_or(0);
+        let subs = needs["subsGoal"].as_i64().unwrap_or(0);
+        let campaign_image = v["image"]["image1xURL"].as_str().unwrap_or_default();
+        let name = v["name"].as_str().unwrap_or_default().to_string();
+        let text: String = ["externalURL", "aboutURL", "instructions", "summary"]
+            .iter()
+            .filter_map(|k| v[*k].as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let drops = v["rewards"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                let reward_id = r["id"].as_str()?.to_string();
+                let reward_name = r["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(&name).to_string();
+                let image = [&r["thumbnailImage"]["image1xURL"], &r["bannerImage"]["image1xURL"]]
+                    .into_iter()
+                    .find_map(|i| i.as_str().filter(|s| !s.is_empty()))
+                    .unwrap_or(campaign_image)
+                    .to_string();
+                let reward_end = parse_dt(&r["earnableUntil"]).map_or(end_at, |e| e.min(end_at));
+                let badge = BadgeReward { benefit_id: reward_id.clone(), name: reward_name.clone(), image };
+                Some(Drop {
+                    id: format!("{id}:{reward_id}"),
+                    name: reward_name.clone(),
+                    benefit: reward_name,
+                    badge: Some(badge.clone()),
+                    rewards: vec![badge],
+                    required_subs: subs,
+                    minutes_required: minutes,
+                    has_preconditions_met: None,
+                    current_minutes_watched: 0,
+                    drop_instance_id: None,
+                    is_claimed: false,
+                    is_claimable: false,
+                    is_printable: false,
+                    percentage_progress: 0,
+                    start_at,
+                    end_at: reward_end,
+                })
+            })
+            .collect();
+        Some(Self {
+            id,
+            game_id: v["game"]["id"].as_str().unwrap_or_default().to_string(),
+            game_name: v["game"]["displayName"]
+                .as_str()
+                .or_else(|| v["game"]["name"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+            game_slug: v["game"]["slug"].as_str().unwrap_or_default().to_string(),
+            name,
+            allowed_channels: twitch_channel_logins(&text).into_iter().map(|l| (String::new(), l)).collect(),
+            in_inventory: false,
+            start_at,
+            end_at,
+            drops,
+            reward: true,
+        })
+    }
+
     pub fn from_json(v: &Value) -> Option<Self> {
         Some(Self {
             id: v["id"].as_str()?.to_string(),
@@ -182,6 +279,7 @@ impl Campaign {
                 .as_array()
                 .map(|drops| drops.iter().filter_map(Drop::from_json).collect())
                 .unwrap_or_default(),
+            reward: false,
         })
     }
 

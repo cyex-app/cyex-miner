@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use crate::{
     config::{Config, EXAMPLE_CONFIG},
     entities::{
-        drops::Campaign,
+        drops::{twitch_channel_logins, Campaign},
         streamer::{ChatPresence, Source, Streamer, StreamerSettings},
     },
     miner::{parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
@@ -14,7 +14,7 @@ use crate::{
     store::Store,
     twitch::{
         merge_campaign_ids, parse_active_campaigns, parse_channel_card, parse_channel_id, parse_directory,
-        parse_search, parse_stream_info, parse_watch_streak,
+        parse_reward_campaigns, parse_search, parse_stream_info, parse_watch_streak,
     },
 };
 
@@ -347,4 +347,64 @@ fn campaign_ids_merge_once_in_first_seen_order() {
     let channels = vec![v(&["a", "b"]), v(&[]), v(&["b", "c"])];
     assert_eq!(merge_campaign_ids(&channels, &v(&["c", "d"])), v(&["a", "b", "c", "d"]));
     assert!(merge_campaign_ids(&[], &[]).is_empty());
+}
+
+fn reward_campaign_json() -> Value {
+    json!({
+        "id": "r1",
+        "name": "K/DA",
+        "status": "ACTIVE",
+        "startsAt": "2020-01-01T00:00:00Z",
+        "endsAt": "2099-01-01T00:00:00Z",
+        "externalURL": "https://www.twitch.tv/directory/category/league-of-legends",
+        "instructions": "Watch on twitch.tv/Samham for 15 minutes",
+        "game": { "id": "21779", "slug": "league-of-legends", "displayName": "League of Legends" },
+        "unlockRequirements": { "subsGoal": 0, "minuteWatchedGoal": 30 },
+        "image": { "image1xURL": "https://example.com/campaign.png" },
+        "rewards": [{ "id": "w1", "name": "K/DA Fan", "thumbnailImage": { "image1xURL": "https://example.com/kda.png" } }]
+    })
+}
+
+#[test]
+fn reward_campaigns_become_watch_time_badges() {
+    let c = Campaign::from_reward_json(&reward_campaign_json()).unwrap();
+    assert!(c.reward && c.dt_match());
+    assert_eq!(c.game_id, "21779");
+    assert_eq!(c.game_slug, "league-of-legends");
+    // The category link isn't a channel; the one in the instructions is.
+    assert_eq!(c.allowed_channels, vec![(String::new(), "samham".to_string())]);
+    let (drop, badge) = c.watch_badge_drop(&HashSet::new()).unwrap();
+    assert_eq!(drop.minutes_required, 30);
+    assert_eq!(drop.id, "r1:w1");
+    assert_eq!(badge.name, "K/DA Fan");
+    assert_eq!(badge.benefit_id, "w1");
+    assert_eq!(badge.image, "https://example.com/kda.png");
+
+    // Subscription goals aren't for watch time.
+    let mut subs = reward_campaign_json();
+    subs["unlockRequirements"]["subsGoal"] = json!(1);
+    assert!(Campaign::from_reward_json(&subs).unwrap().watch_badge_drop(&HashSet::new()).is_none());
+    // No game: any channel.
+    let mut sitewide = reward_campaign_json();
+    sitewide["game"] = Value::Null;
+    assert_eq!(Campaign::from_reward_json(&sitewide).unwrap().game_id, "");
+}
+
+#[test]
+fn parses_reward_campaign_list_in_either_place() {
+    let top = json!({"data":{"currentUser":{"id":"1"},"rewardCampaignsAvailableToUser":[{"id":"a"}]}});
+    assert_eq!(parse_reward_campaigns(&top).unwrap().len(), 1);
+    let inside = json!({"data":{"currentUser":{"rewardCampaignsAvailableToUser":[{"id":"a"},{"id":"b"}]}}});
+    assert_eq!(parse_reward_campaigns(&inside).unwrap().len(), 2);
+    assert!(parse_reward_campaigns(&json!({"data":{"currentUser":{}}})).unwrap().is_empty());
+    assert!(parse_reward_campaigns(&json!({"data":null})).is_err());
+}
+
+#[test]
+fn finds_channel_links() {
+    assert_eq!(twitch_channel_logins("https://www.twitch.tv/samham"), vec!["samham"]);
+    assert_eq!(twitch_channel_logins("see twitch.tv/A_b1 and twitch.tv/a_b1."), vec!["a_b1"]);
+    assert!(twitch_channel_logins("https://twitch.tv/directory/category/irl").is_empty());
+    assert!(twitch_channel_logins("https://twitch.tv/drops").is_empty());
+    assert!(twitch_channel_logins("no links").is_empty());
 }

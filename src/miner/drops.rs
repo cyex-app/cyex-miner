@@ -19,7 +19,8 @@ use crate::{
 };
 
 /// Seconds between campaign list reads, and the shorter wait when no campaign id was found.
-const CAMPAIGNS_EVERY: f64 = 30.0 * 60.0;
+/// Short enough for badge events that only run an hour or two.
+const CAMPAIGNS_EVERY: f64 = 10.0 * 60.0;
 const CAMPAIGNS_RETRY: f64 = 5.0 * 60.0;
 
 /// The badge debug file, next to the config.
@@ -159,6 +160,54 @@ impl Miner {
         Ok((campaigns, retry_soon))
     }
 
+    /// Running reward campaigns with a watch goal (Twitch's global badges), with the ids of the
+    /// channels they name looked up. A failed read gives none; the drop campaigns don't depend on it.
+    async fn fetch_reward_campaigns(&self) -> Vec<Campaign> {
+        let json = match self.twitch.reward_campaigns().await {
+            Ok(json) => json,
+            Err(e) => {
+                warn!("Could not load reward campaigns (global badges): {e:#}");
+                return Vec::new();
+            }
+        };
+        let mut campaigns: Vec<Campaign> = json
+            .iter()
+            .filter_map(Campaign::from_reward_json)
+            .filter(Campaign::dt_match)
+            .filter_map(|mut c| {
+                c.clear_drops();
+                (!c.drops.is_empty()).then_some(c)
+            })
+            .collect();
+        for c in &mut campaigns {
+            if c.allowed_channels.is_empty() {
+                continue;
+            }
+            let logins: Vec<String> = c.allowed_channels.iter().map(|(_, l)| l.clone()).collect();
+            let ids = self.twitch.channel_ids(&logins).await;
+            c.allowed_channels = logins
+                .into_iter()
+                .zip(ids)
+                .filter_map(|(login, id)| Some((id.ok().flatten()?, login)))
+                .collect();
+        }
+        let watch: Vec<String> = campaigns
+            .iter()
+            .flat_map(|c| {
+                c.drops.iter().filter(|d| d.minutes_required > 0 && d.required_subs == 0).map(move |d| {
+                    let place = match (c.allowed_channels.first(), c.game_name.as_str()) {
+                        (Some((_, login)), _) => login.clone(),
+                        (None, "") => "any channel".to_string(),
+                        (None, game) => game.to_string(),
+                    };
+                    format!("{} ({} min, {place})", d.name, d.minutes_required)
+                })
+            })
+            .collect();
+        info!("{} reward campaigns running, for watch time: {}", json.len(), if watch.is_empty() { "none".into() } else { watch.join(", ") });
+        campaigns
+    }
+
     /// One line when the campaign counts change: dashboard ids, ids tracked after the fallback.
     fn note_campaign_counts(&self, dashboard: usize, tracked: usize) {
         static LAST: Mutex<Option<(usize, usize)>> = Mutex::new(None);
@@ -216,16 +265,22 @@ impl Miner {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
                     self.refresh_event_badges().await;
+                    let rewards = self.fetch_reward_campaigns().await;
                     match self.fetch_campaigns().await {
                         Ok((c, retry_soon)) => {
-                            self.set_badge_campaigns(&c);
+                            self.set_badge_campaigns(&[c.as_slice(), &rewards].concat());
                             campaigns = c;
                             // No ids anywhere: the channel reads may not have run yet, look again soon.
                             if retry_soon {
                                 last_refresh = now() - (CAMPAIGNS_EVERY - CAMPAIGNS_RETRY);
                             }
                         }
-                        Err(e) => warn!("Could not load drop campaigns: {e:#}"),
+                        Err(e) => {
+                            warn!("Could not load drop campaigns: {e:#}");
+                            // Reward badges don't depend on the drop list; keep the known drop
+                            // campaigns' badges by passing the last list along.
+                            self.set_badge_campaigns(&[campaigns.as_slice(), &rewards].concat());
+                        }
                     }
                     if self.config.badge_debug {
                         self.write_badge_debug(&mut last_badge_debug).await;
