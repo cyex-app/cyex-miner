@@ -155,30 +155,6 @@ pub struct Campaign {
     pub reward: bool,
 }
 
-/// Paths on twitch.tv that aren't channels.
-const NOT_CHANNELS: &[&str] = &[
-    "directory", "drops", "inventory", "settings", "p", "search", "subs", "turbo", "prime", "downloads",
-    "jobs", "store", "videos", "event", "events", "wallet", "friends", "subscriptions", "messages",
-];
-
-/// The channel logins `twitch.tv/<login>` links in `text` point to, each once.
-pub(crate) fn twitch_channel_logins(text: &str) -> Vec<String> {
-    let mut logins = Vec::new();
-    for (i, _) in text.match_indices("twitch.tv/") {
-        let login: String = text[i + "twitch.tv/".len()..]
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect::<String>()
-            .to_lowercase();
-        // A path going on (`/directory/...`) or a too short name isn't a channel page.
-        let rest = &text[i + "twitch.tv/".len() + login.len()..];
-        if login.len() >= 3 && !rest.starts_with('/') && !NOT_CHANNELS.contains(&login.as_str()) && !logins.contains(&login) {
-            logins.push(login);
-        }
-    }
-    logins
-}
-
 /// The page data a Next.js page embeds (`<script id="__NEXT_DATA__">`), as JSON.
 pub(crate) fn next_data(html: &str) -> Option<Value> {
     let start = html.find("id=\"__NEXT_DATA__\"")?;
@@ -224,36 +200,73 @@ fn watch_minutes(objectives: &Value) -> Option<i64> {
         .min()
 }
 
+/// Whether `objectives` has a way of earning by watching alone whose minutes aren't filled in
+/// yet (a new availability of a badge often lists the channel before the minutes).
+fn watch_minutes_unknown(objectives: &Value) -> bool {
+    objectives.as_array().into_iter().flatten().any(|steps| {
+        steps.as_array().is_some_and(|steps| {
+            !steps.is_empty()
+                && steps.iter().all(|s| s["type"].as_str() == Some("twitch_watch") && s["days"].as_i64().unwrap_or(0) <= 1)
+                && steps.iter().any(|s| s["minutes"].is_null())
+        })
+    })
+}
+
+/// The window of a streamdatabase availability; catquery's (`start_at`, `end_at`) where the page
+/// leaves it out.
+fn availability_window(a: &Value, start_at: DateTime<Utc>, end_at: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+    let page_time = |date: &str, time: &str| {
+        let date = a[date].as_str()?;
+        let time = a[time].as_str().unwrap_or("00:00");
+        chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M")
+            .ok()
+            .map(|t| t.and_utc())
+    };
+    let start = page_time("start_at_date", "start_at_time").unwrap_or(start_at);
+    let end = match page_time("end_at_date", "end_at_time") {
+        // A date without a time: the whole day.
+        Some(end) if a["end_at_time"].is_null() => end + chrono::Duration::days(1),
+        Some(end) => end + chrono::Duration::seconds(59),
+        None => end_at,
+    };
+    (start, end)
+}
+
 impl Campaign {
+    /// `from_event_badge_at` now.
+    pub fn from_event_badge(badge: &Value, page: &Value) -> Option<Self> {
+        Self::from_event_badge_at(badge, page, Utc::now())
+    }
+
     /// A free Twitch event badge from catquery's list (`badge`: id, name, imageUrl, startAt,
     /// endAt), earned as its streamdatabase page (`page`, the page's `__NEXT_DATA__`) describes:
     /// watch N minutes in a category, on any channel or the channels it names. Twitch sends these
     /// as neither drops nor reward campaigns, so they're farmed like reward campaigns.
-    pub fn from_event_badge(badge: &Value, page: &Value) -> Option<Self> {
+    ///
+    /// A badge can run several times (availabilities), each with its own window and channels:
+    /// the one running at `now` is used, else the next one, else the first. One without minutes
+    /// yet takes the minutes another availability of the badge gives.
+    pub fn from_event_badge_at(badge: &Value, page: &Value, now: DateTime<Utc>) -> Option<Self> {
         let set_id = badge["id"].as_str()?;
         let name = badge["name"].as_str()?.to_string();
         let start_at = parse_dt(&badge["startAt"])?;
         let end_at = parse_dt(&badge["endAt"])?;
-        let (availability, minutes) = page["props"]["pageProps"]["availabilities"]
-            .as_array()?
+        let availabilities = page["props"]["pageProps"]["availabilities"].as_array()?;
+        let known = availabilities.iter().filter_map(|a| watch_minutes(&a["objectives"])).min();
+        // (availability, minutes, start, end); the page's own window is the exact one (Jordan x
+        // Space Jam ran 20:25-21:59 UTC while catquery said until two days later).
+        let ways: Vec<(&Value, i64, DateTime<Utc>, DateTime<Utc>)> = availabilities
             .iter()
-            .find_map(|a| Some((a, watch_minutes(&a["objectives"])?)))?;
-        // The page's own window is the exact one (Jordan x Space Jam ran 20:25-21:59 UTC while
-        // catquery said until two days later); catquery's is the fallback.
-        let page_time = |date: &str, time: &str| {
-            let date = availability[date].as_str()?;
-            let time = availability[time].as_str().unwrap_or("00:00");
-            chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M")
-                .ok()
-                .map(|t| t.and_utc())
-        };
-        let start_at = page_time("start_at_date", "start_at_time").unwrap_or(start_at);
-        let end_at = match page_time("end_at_date", "end_at_time") {
-            // A date without a time: the whole day.
-            Some(end) if availability["end_at_time"].is_null() => end + chrono::Duration::days(1),
-            Some(end) => end + chrono::Duration::seconds(59),
-            None => end_at,
-        };
+            .filter_map(|a| {
+                let minutes = watch_minutes(&a["objectives"])
+                    .or_else(|| watch_minutes_unknown(&a["objectives"]).then_some(known).flatten())?;
+                let (start, end) = availability_window(a, start_at, end_at);
+                Some((a, minutes, start, end))
+            })
+            .collect();
+        let running = ways.iter().find(|(_, _, s, e)| *s <= now && now < *e);
+        let next = ways.iter().filter(|(_, _, s, _)| *s > now).min_by_key(|(_, _, s, _)| *s);
+        let &(availability, minutes, start_at, end_at) = running.or(next).or(ways.first())?;
         let game = &availability["categories"][0]["game"];
         let game_name = game["name"].as_str().unwrap_or_default().to_string();
         let image = badge["imageUrl"].as_str().unwrap_or_default().to_string();
@@ -295,79 +308,6 @@ impl Campaign {
             start_at,
             end_at,
             drops: vec![drop],
-            reward: true,
-        })
-    }
-
-    /// A reward campaign from the dashboard's `rewardCampaignsAvailableToUser`: "watch N minutes
-    /// of a category (or a channel) for a badge". Each reward becomes a drop with that goal.
-    /// Channels it names in its links become its allowed channels, with ids still to look up.
-    pub fn from_reward_json(v: &Value) -> Option<Self> {
-        let id = v["id"].as_str()?.to_string();
-        let start_at = parse_dt(&v["startsAt"]).or_else(|| parse_dt(&v["startAt"]))?;
-        let end_at = parse_dt(&v["endsAt"]).or_else(|| parse_dt(&v["endAt"]))?;
-        let needs = &v["unlockRequirements"];
-        let minutes = needs["minuteWatchedGoal"].as_i64().unwrap_or(0);
-        let subs = needs["subsGoal"].as_i64().unwrap_or(0);
-        let campaign_image = v["image"]["image1xURL"].as_str().unwrap_or_default();
-        let name = v["name"].as_str().unwrap_or_default().to_string();
-        let text: String = ["externalURL", "aboutURL", "instructions", "summary"]
-            .iter()
-            .filter_map(|k| v[*k].as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let drops = v["rewards"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|r| {
-                let reward_id = r["id"].as_str()?.to_string();
-                let reward_name = r["name"].as_str().filter(|n| !n.is_empty()).unwrap_or(&name).to_string();
-                let image = [&r["thumbnailImage"]["image1xURL"], &r["bannerImage"]["image1xURL"]]
-                    .into_iter()
-                    .find_map(|i| i.as_str().filter(|s| !s.is_empty()))
-                    .unwrap_or(campaign_image)
-                    .to_string();
-                let reward_end = parse_dt(&r["earnableUntil"]).map_or(end_at, |e| e.min(end_at));
-                let badge = BadgeReward { benefit_id: reward_id.clone(), name: reward_name.clone(), image };
-                Some(Drop {
-                    id: format!("{id}:{reward_id}"),
-                    name: reward_name.clone(),
-                    benefit: reward_name,
-                    // Most reward campaigns give game items (e.g. a Minecraft add-on), not badges:
-                    // a reward only counts as a badge when its name is a Twitch event badge's,
-                    // see `watch_badge_drops`.
-                    badge: None,
-                    rewards: vec![badge],
-                    required_subs: subs,
-                    minutes_required: minutes,
-                    has_preconditions_met: None,
-                    current_minutes_watched: 0,
-                    drop_instance_id: None,
-                    is_claimed: false,
-                    is_claimable: false,
-                    is_printable: false,
-                    percentage_progress: 0,
-                    start_at,
-                    end_at: reward_end,
-                })
-            })
-            .collect();
-        Some(Self {
-            id,
-            game_id: v["game"]["id"].as_str().unwrap_or_default().to_string(),
-            game_name: v["game"]["displayName"]
-                .as_str()
-                .or_else(|| v["game"]["name"].as_str())
-                .unwrap_or_default()
-                .to_string(),
-            game_slug: v["game"]["slug"].as_str().unwrap_or_default().to_string(),
-            name,
-            allowed_channels: twitch_channel_logins(&text).into_iter().map(|l| (String::new(), l)).collect(),
-            in_inventory: false,
-            start_at,
-            end_at,
-            drops,
             reward: true,
         })
     }

@@ -109,22 +109,6 @@ pub(crate) fn parse_active_campaigns(resp: &Value) -> Result<Vec<Value>> {
         .collect())
 }
 
-/// The reward campaigns of a dashboard read with `fetchRewardCampaigns`: Twitch's global badges
-/// for watching. Twitch has put the list both next to `currentUser` and inside it.
-pub(crate) fn parse_reward_campaigns(resp: &Value) -> Result<Vec<Value>> {
-    let data = &resp["data"];
-    if data.is_null() {
-        bail!("unexpected response: {resp}");
-    }
-    Ok(data["rewardCampaignsAvailableToUser"]
-        .as_array()
-        .or_else(|| data["currentUser"]["rewardCampaignsAvailableToUser"].as_array())
-        .into_iter()
-        .flatten()
-        .cloned()
-        .collect())
-}
-
 /// Campaign ids from the channels' reads, then the inventory's, each once, in first-seen order.
 pub(crate) fn merge_campaign_ids(channels: &[Vec<String>], inventory: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -623,14 +607,6 @@ impl Twitch {
             .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": false })))
             .await?;
         parse_active_campaigns(&resp)
-    }
-
-    /// Reward campaigns ("watch 15 minutes of X for a badge"), which the drop campaign list leaves out.
-    pub async fn reward_campaigns(&self) -> Result<Vec<Value>> {
-        let resp = self
-            .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": true })))
-            .await?;
-        parse_reward_campaigns(&resp)
     }
 
     pub async fn campaign_details(&self, ids: &[String]) -> Result<Vec<Value>> {

@@ -1,7 +1,6 @@
 //! Drop campaigns: tracks progress on the live channels and claims finished drops.
 
 use std::{
-    collections::HashSet,
     fs,
     io::Write,
     sync::{Arc, Mutex, PoisonError},
@@ -28,24 +27,6 @@ const CAMPAIGNS_RETRY: f64 = 5.0 * 60.0;
 const BADGE_DEBUG_FILE: &str = "badge-debug.jsonl";
 /// Past this size the file is moved to `badge-debug.jsonl.old` and a new one started.
 const BADGE_DEBUG_MAX_BYTES: u64 = 10 * 1024 * 1024;
-
-/// The drop campaigns followed by the reward and event badge campaigns. An event badge
-/// (`event:` id, from streamdatabase) that a Twitch campaign also gives is left out: Twitch's
-/// own campaign reports progress.
-pub(crate) fn with_event_badges(drops: &[Campaign], rewards: &[Campaign]) -> Vec<Campaign> {
-    let from_twitch: HashSet<String> = drops
-        .iter()
-        .chain(rewards.iter().filter(|c| !c.id.starts_with("event:")))
-        .flat_map(|c| &c.drops)
-        .flat_map(|d| &d.rewards)
-        .map(|r| r.name.trim().to_lowercase())
-        .collect();
-    drops
-        .iter()
-        .chain(rewards.iter().filter(|c| !(c.id.starts_with("event:") && from_twitch.contains(&c.name.trim().to_lowercase()))))
-        .cloned()
-        .collect()
-}
 
 impl Miner {
     /// Appends what Twitch sends about drops and reward campaigns to `BADGE_DEBUG_FILE` when it
@@ -179,54 +160,6 @@ impl Miner {
         Ok((campaigns, retry_soon))
     }
 
-    /// Running reward campaigns with a watch goal (Twitch's global badges), with the ids of the
-    /// channels they name looked up. A failed read gives none; the drop campaigns don't depend on it.
-    async fn fetch_reward_campaigns(&self) -> Vec<Campaign> {
-        let json = match self.twitch.reward_campaigns().await {
-            Ok(json) => json,
-            Err(e) => {
-                warn!("Could not load reward campaigns (global badges): {e:#}");
-                return Vec::new();
-            }
-        };
-        let mut campaigns: Vec<Campaign> = json
-            .iter()
-            .filter_map(Campaign::from_reward_json)
-            .filter(Campaign::dt_match)
-            .filter_map(|mut c| {
-                c.clear_drops();
-                (!c.drops.is_empty()).then_some(c)
-            })
-            .collect();
-        for c in &mut campaigns {
-            if c.allowed_channels.is_empty() {
-                continue;
-            }
-            let logins: Vec<String> = c.allowed_channels.iter().map(|(_, l)| l.clone()).collect();
-            let ids = self.twitch.channel_ids(&logins).await;
-            c.allowed_channels = logins
-                .into_iter()
-                .zip(ids)
-                .filter_map(|(login, id)| Some((id.ok().flatten()?, login)))
-                .collect();
-        }
-        let watch: Vec<String> = campaigns
-            .iter()
-            .flat_map(|c| {
-                c.drops.iter().filter(|d| d.minutes_required > 0 && d.required_subs == 0).map(move |d| {
-                    let place = match (c.allowed_channels.first(), c.game_name.as_str()) {
-                        (Some((_, login)), _) => login.clone(),
-                        (None, "") => "any channel".to_string(),
-                        (None, game) => game.to_string(),
-                    };
-                    format!("{} ({} min, {place})", d.name, d.minutes_required)
-                })
-            })
-            .collect();
-        info!("{} reward campaigns running, with a watch goal (badges among them count): {}", json.len(), if watch.is_empty() { "none".into() } else { watch.join(", ") });
-        campaigns
-    }
-
     /// One line when the campaign counts change: dashboard ids, ids tracked after the fallback.
     fn note_campaign_counts(&self, dashboard: usize, tracked: usize) {
         static LAST: Mutex<Option<(usize, usize)>> = Mutex::new(None);
@@ -283,24 +216,19 @@ impl Miner {
                 if now() - last_refresh > CAMPAIGNS_EVERY {
                     last_refresh = now();
                     self.claim_all_drops_from_inventory().await;
+                    // Badges come from catquery's event badge list alone (where to watch from
+                    // each badge's streamdatabase page); a failed read keeps the last list.
                     self.refresh_event_badges().await;
-                    let mut rewards = self.fetch_reward_campaigns().await;
-                    rewards.extend(self.event_campaigns());
+                    self.set_badge_campaigns(&self.event_campaigns());
                     match self.fetch_campaigns().await {
                         Ok((c, retry_soon)) => {
-                            self.set_badge_campaigns(&with_event_badges(&c, &rewards));
                             campaigns = c;
                             // No ids anywhere: the channel reads may not have run yet, look again soon.
                             if retry_soon {
                                 last_refresh = now() - (CAMPAIGNS_EVERY - CAMPAIGNS_RETRY);
                             }
                         }
-                        Err(e) => {
-                            warn!("Could not load drop campaigns: {e:#}");
-                            // Reward badges don't depend on the drop list; keep the known drop
-                            // campaigns' badges by passing the last list along.
-                            self.set_badge_campaigns(&with_event_badges(&campaigns, &rewards));
-                        }
+                        Err(e) => warn!("Could not load drop campaigns: {e:#}"),
                     }
                     if self.config.badge_debug {
                         self.write_badge_debug(&mut last_badge_debug).await;

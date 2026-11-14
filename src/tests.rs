@@ -5,16 +5,16 @@ use serde_json::{json, Value};
 use crate::{
     config::{Config, EXAMPLE_CONFIG},
     entities::{
-        drops::{game_slug, next_data, twitch_channel_logins, Campaign},
+        drops::{game_slug, next_data, Campaign},
         streamer::{ChatPresence, Source, Streamer, StreamerSettings},
     },
-    miner::{with_event_badges, parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
+    miner::{parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
     priority::{select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
     twitch::{
         merge_campaign_ids, parse_active_campaigns, parse_channel_card, parse_channel_id, parse_directory,
-        parse_reward_campaigns, parse_search, parse_stream_info, parse_watch_streak,
+        parse_search, parse_stream_info, parse_watch_streak,
     },
 };
 
@@ -349,69 +349,6 @@ fn campaign_ids_merge_once_in_first_seen_order() {
     assert!(merge_campaign_ids(&[], &[]).is_empty());
 }
 
-fn reward_campaign_json() -> Value {
-    json!({
-        "id": "r1",
-        "name": "K/DA",
-        "status": "ACTIVE",
-        "startsAt": "2020-01-01T00:00:00Z",
-        "endsAt": "2099-01-01T00:00:00Z",
-        "externalURL": "https://www.twitch.tv/directory/category/league-of-legends",
-        "instructions": "Watch on twitch.tv/Samham for 15 minutes",
-        "game": { "id": "21779", "slug": "league-of-legends", "displayName": "League of Legends" },
-        "unlockRequirements": { "subsGoal": 0, "minuteWatchedGoal": 30 },
-        "image": { "image1xURL": "https://example.com/campaign.png" },
-        "rewards": [{ "id": "w1", "name": "K/DA Fan", "thumbnailImage": { "image1xURL": "https://example.com/kda.png" } }]
-    })
-}
-
-#[test]
-fn reward_campaigns_become_watch_time_badges() {
-    let c = Campaign::from_reward_json(&reward_campaign_json()).unwrap();
-    assert!(c.reward && c.dt_match());
-    assert_eq!(c.game_id, "21779");
-    assert_eq!(c.game_slug, "league-of-legends");
-    // The category link isn't a channel; the one in the instructions is.
-    assert_eq!(c.allowed_channels, vec![(String::new(), "samham".to_string())]);
-    // Only a Twitch event badge counts; a game item (a Minecraft add-on) doesn't.
-    assert!(c.watch_badge_drop(&HashSet::new()).is_none());
-    let events: HashSet<String> = ["k/da fan".to_string()].into();
-    let (drop, badge) = c.watch_badge_drop(&events).unwrap();
-    assert_eq!(drop.minutes_required, 30);
-    assert_eq!(drop.id, "r1:w1");
-    assert_eq!(badge.name, "K/DA Fan");
-    assert_eq!(badge.benefit_id, "w1");
-    assert_eq!(badge.image, "https://example.com/kda.png");
-
-    // Subscription goals aren't for watch time.
-    let mut subs = reward_campaign_json();
-    subs["unlockRequirements"]["subsGoal"] = json!(1);
-    assert!(Campaign::from_reward_json(&subs).unwrap().watch_badge_drop(&events).is_none());
-    // No game: any channel.
-    let mut sitewide = reward_campaign_json();
-    sitewide["game"] = Value::Null;
-    assert_eq!(Campaign::from_reward_json(&sitewide).unwrap().game_id, "");
-}
-
-#[test]
-fn parses_reward_campaign_list_in_either_place() {
-    let top = json!({"data":{"currentUser":{"id":"1"},"rewardCampaignsAvailableToUser":[{"id":"a"}]}});
-    assert_eq!(parse_reward_campaigns(&top).unwrap().len(), 1);
-    let inside = json!({"data":{"currentUser":{"rewardCampaignsAvailableToUser":[{"id":"a"},{"id":"b"}]}}});
-    assert_eq!(parse_reward_campaigns(&inside).unwrap().len(), 2);
-    assert!(parse_reward_campaigns(&json!({"data":{"currentUser":{}}})).unwrap().is_empty());
-    assert!(parse_reward_campaigns(&json!({"data":null})).is_err());
-}
-
-#[test]
-fn finds_channel_links() {
-    assert_eq!(twitch_channel_logins("https://www.twitch.tv/samham"), vec!["samham"]);
-    assert_eq!(twitch_channel_logins("see twitch.tv/A_b1 and twitch.tv/a_b1."), vec!["a_b1"]);
-    assert!(twitch_channel_logins("https://twitch.tv/directory/category/irl").is_empty());
-    assert!(twitch_channel_logins("https://twitch.tv/drops").is_empty());
-    assert!(twitch_channel_logins("no links").is_empty());
-}
-
 fn event_badge(id: &str, name: &str) -> Value {
     json!({
         "id": id, "name": name, "imageUrl": "https://static-cdn.jtvnw.net/badges/v1/x/3",
@@ -478,21 +415,6 @@ fn makes_directory_slugs() {
     assert_eq!(game_slug("Tom Clancy's Rainbow Six Siege"), "tom-clancy-s-rainbow-six-siege");
 }
 
-#[test]
-fn event_badges_twitch_already_gives_are_left_out() {
-    let page = next_data(&event_page(json!({
-        "objectives": [[{ "type": "twitch_watch", "minutes": 30, "days": null }]],
-        "categories": [], "channels": null
-    })))
-    .unwrap();
-    let event = Campaign::from_event_badge(&event_badge("kda-fan", "K/DA Fan"), &page).unwrap();
-    let other = Campaign::from_event_badge(&event_badge("other", "Other"), &page).unwrap();
-    let reward = Campaign::from_reward_json(&reward_campaign_json()).unwrap();
-    let ids = |v: Vec<Campaign>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
-    assert_eq!(ids(with_event_badges(&[], &[reward.clone(), event.clone(), other.clone()])), ["r1", "event:other"]);
-    assert_eq!(ids(with_event_badges(&[], &[event, other])), ["event:kda-fan", "event:other"]);
-}
-
 /// The real pages, when saved to `$EVENT_PAGES_DIR` (kda.html, jordan.html).
 #[test]
 fn real_streamdatabase_pages() {
@@ -503,6 +425,45 @@ fn real_streamdatabase_pages() {
         assert_eq!((c.drops[0].minutes_required, c.game_id.as_str()), (minutes, game), "{file}");
         println!("{file}: {:?} {} {}", c.allowed_channels, c.game_slug, c.drops[0].minutes_required);
     }
+}
+
+#[test]
+fn event_badges_use_the_run_going_on_now() {
+    // As the Jordan x Space Jam page had it on 2026-11-14: a run on samham that ended, and one on
+    // realkatieb that evening whose minutes weren't filled in yet.
+    let page = json!({ "props": { "pageProps": { "availabilities": [
+        {
+            "objectives": [[{ "type": "twitch_watch", "minutes": 15, "days": null }]],
+            "categories": [{ "game": { "id": "509672", "name": "IRL" }, "slug": null }],
+            "channels": [{ "user": { "id": "54051059", "login": "samham" } }],
+            "start_at_date": "2026-11-13", "start_at_time": "20:25",
+            "end_at_date": "2026-11-14", "end_at_time": "07:59"
+        },
+        {
+            "objectives": [[{ "type": "twitch_watch", "minutes": null, "days": null }]],
+            "categories": [],
+            "channels": [{ "user": { "id": "165301937", "login": "realkatieb" } }],
+            "start_at_date": "2026-11-14", "start_at_time": "20:00", "end_at_date": "2026-11-14"
+        }
+    ] } } });
+    let badge = json!({ "id": "j", "name": "J", "startAt": "2026-11-13T00:00:00.000Z", "endAt": "2026-11-15T23:59:59.999Z" });
+    let at = |t: &str| chrono::DateTime::parse_from_rfc3339(t).unwrap().with_timezone(&chrono::Utc);
+    let on = |t: &str| Campaign::from_event_badge_at(&badge, &page, at(t)).unwrap();
+
+    // During the first run: samham, 15 minutes.
+    let c = on("2026-11-13T21:00:00Z");
+    assert!(c.start_at <= at("2026-11-13T21:00:00Z") && at("2026-11-13T21:00:00Z") < c.end_at);
+    assert_eq!(c.allowed_channels, vec![("54051059".to_string(), "samham".to_string())]);
+    // Between the runs: the next one, not running yet.
+    let c = on("2026-11-14T12:00:00Z");
+    assert_eq!(c.allowed_channels[0].1, "realkatieb");
+    assert!(c.start_at > at("2026-11-14T12:00:00Z"));
+    // During the second run: realkatieb, on any game, with the first run's 15 minutes.
+    let c = on("2026-11-14T21:00:00Z");
+    assert_eq!(c.allowed_channels, vec![("165301937".to_string(), "realkatieb".to_string())]);
+    assert_eq!(c.game_id, "");
+    assert_eq!(c.drops[0].minutes_required, 15);
+    assert_eq!(c.end_at.to_rfc3339(), "2026-11-15T00:00:00+00:00");
 }
 
 #[test]

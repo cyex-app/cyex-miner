@@ -38,8 +38,6 @@ pub use predictions::{PredictionSettings, PredictionsView};
 pub(crate) use predictions::{pick as pick_outcome, Outcome, Strategy};
 #[cfg(test)]
 pub(crate) use badges::parse_event_badges;
-#[cfg(test)]
-pub(crate) use drops::with_event_badges;
 
 /// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
 const PRIORITY_KEY: &str = "priority";
@@ -937,30 +935,36 @@ impl Miner {
             if self.fill_slots() && !rules.contains(&Priority::Order) {
                 rules.push(Priority::Order);
             }
-            let mut watching = priority::select_watching(&candidates, &rules);
-            // Twitch counts drop progress on one stream at a time; switching between two every few
+            // Twitch counts badge progress on one stream at a time; switching between two every few
             // seconds keeps restarting it. So while a picked badge can be earned, only its channel
-            // is watched (like TwitchDropsMiner), and the second slot waits. Channels the rules
-            // above BADGES picked (e.g. a pending watch streak) keep their slot, as ranked.
-            let above: Vec<Arc<Streamer>> = match rules.iter().position(|r| *r == Priority::Badges) {
-                Some(pos) => priority::select_watching(&candidates, &rules[..pos]),
-                None => Vec::new(),
-            };
-            let badge_channel = watching.iter().find(|s| s.state().badge_drop).cloned();
+            // is watched (like TwitchDropsMiner), whatever the other rules say: watch streaks and
+            // the second slot wait until it's earned. The channel already focused stays, so
+            // progress isn't split. Taking BADGES out of the rules turns this off.
+            let badge_channel = rules
+                .contains(&Priority::Badges)
+                .then(|| {
+                    let eligible = || candidates.iter().filter(|s| s.state().badge_drop);
+                    eligible()
+                        .find(|s| focus.as_deref() == Some(s.channel_id.as_str()))
+                        .or_else(|| eligible().next())
+                        .cloned()
+                })
+                .flatten();
             let focus_now = badge_channel.as_ref().map(|s| s.channel_id.clone());
             if focus_now != focus {
                 match &badge_channel {
                     Some(s) => self.event(format!(
-                        "Watching {s} for a picked badge; the second slot only goes to rules ranked above BADGES"
+                        "Watching only {s} for a picked badge; watch streaks and the second slot wait until it's earned"
                     )),
                     None if focus.is_some() => self.event("Back to watching 2 channels"),
                     None => {}
                 }
                 focus = focus_now;
             }
-            if let Some(s) = badge_channel {
-                watching.retain(|w| Arc::ptr_eq(w, &s) || above.iter().any(|a| Arc::ptr_eq(a, w)));
-            }
+            let watching = match badge_channel {
+                Some(s) => vec![s],
+                None => priority::select_watching(&candidates, &rules),
+            };
             for s in &streamers {
                 s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));
             }

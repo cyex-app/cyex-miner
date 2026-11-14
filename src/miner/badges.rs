@@ -1,6 +1,8 @@
-//! Badge drops: drop campaigns that give a chat badge for watch time. Live channels that can earn a
-//! badge picked in the web UI get a watch slot through the BADGES rule. Channels can be quick-added
-//! for a badge; those are removed again once it's earned or the campaign ends.
+//! Badges for watch time, from catquery's event badge list (`EVENT_BADGES_URL`): each free,
+//! running badge's streamdatabase page says where to watch (a category, or named channels) and
+//! for how long. Live channels that can earn a picked badge are watched alone, ahead of every
+//! other rule. Channels can be quick-added for a badge; those are removed again once it's earned
+//! or it ends.
 
 use std::{
     cmp::Reverse,
@@ -98,8 +100,6 @@ struct Badge {
     earned: bool,
     /// Seen not earned in the inventory, so earning it now happened this session.
     seen_unearned: bool,
-    /// Found in the drops inventory but not in the campaign list; kept until it ends.
-    from_inventory: bool,
     /// From a reward campaign: earned on live channels in its game (or the channels it names),
     /// whatever drops they list. Its minutes are counted here.
     reward: bool,
@@ -134,7 +134,6 @@ impl Badge {
                     ends_at: drop.end_at.min(c.end_at).timestamp() as f64,
                     earned: false,
                     seen_unearned: false,
-                    from_inventory: false,
                     reward: c.reward,
                     reward_minutes: 0.0,
                 }
@@ -204,8 +203,8 @@ pub(super) struct BadgeState {
     reward_done: Mutex<HashSet<String>>,
     /// Running event badges for watch time, see `load_event_campaigns`.
     event_campaigns: RwLock<Vec<Campaign>>,
-    /// Streamdatabase pages that gave a watch goal, by badge id.
-    event_pages: Mutex<HashMap<String, Value>>,
+    /// Streamdatabase pages that gave a watch goal, with when they were read, by badge id.
+    event_pages: Mutex<HashMap<String, (f64, Value)>>,
 }
 
 impl BadgeState {
@@ -226,9 +225,13 @@ impl BadgeState {
     }
 }
 
-/// Twitch's free event badges (names, images, time windows), kept by catquery. Twitch doesn't
-/// always mark a drop's badge as one; a reward with one of these names is treated as a badge.
+/// Twitch's free event badges (names, images, time windows, streamdatabase page), kept by
+/// catquery: the list of badges the miner works on.
 const EVENT_BADGES_URL: &str = "https://api.catquery.com/eventBadges";
+/// How long a badge's streamdatabase page is used before it's read again: new runs of a badge,
+/// on other channels, get added to it.
+/// Short, as a run can last as little as an hour and a half.
+const EVENT_PAGE_TTL_SECS: f64 = 20.0 * 60.0;
 
 /// The running, free event badges in a `EVENT_BADGES_URL` response: lowercase name -> image URL.
 pub(crate) fn parse_event_badges(resp: &Value, now: f64) -> HashMap<String, String> {
@@ -303,10 +306,9 @@ impl Miner {
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
         let events = self.badges.events.read().unwrap().clone();
         let done = self.badges.reward_done.lock().unwrap().clone();
-        let now = now();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
-            let mut fresh: Vec<Badge> = campaigns
+            let fresh: Vec<Badge> = campaigns
                 .iter()
                 .flat_map(|c| Badge::from_campaign(c, &events))
                 .map(|mut b| {
@@ -324,21 +326,7 @@ impl Miner {
                     b
                 })
                 .collect();
-            let listed = fresh.iter().map(|b| &b.campaign_id).collect::<HashSet<_>>().len();
-            // Badges only the inventory knows stay until they end.
-            let from_inventory: Vec<Badge> = badges
-                .iter()
-                .filter(|b| b.from_inventory && b.ends_at > now && !fresh.iter().any(|f| f.drop_id == b.drop_id))
-                .cloned()
-                .collect();
-            fresh.extend(from_inventory);
             *badges = fresh;
-            // Says where an empty Badge drops list comes from: no campaigns, or none giving a badge.
-            info!(
-                "{} drop campaigns running, {listed} with a badge for watch time ({} event badges known)",
-                campaigns.len(),
-                events.len()
-            );
             badges.iter().map(|b| b.campaign_id.clone()).collect()
         };
         let saved = {
@@ -371,10 +359,11 @@ impl Miner {
     }
 
     /// Turns the running free event badges into campaigns, from their streamdatabase pages (what
-    /// to watch, where). Twitch sends some global badges (e.g. "watch 30 minutes of League of
-    /// Legends") as neither drops nor reward campaigns, so this is the only way to see them.
-    /// Pages that gave a watch goal are kept; the others are read again next time, as the
-    /// page may be filled in later.
+    /// to watch, where). This is where the miner's badges come from: Twitch sends some global
+    /// badges (e.g. "watch 30 minutes of League of Legends") as neither drops nor reward
+    /// campaigns, and the page names the channels each run of a badge is on. Pages that gave a
+    /// watch goal are kept for `EVENT_PAGE_TTL_SECS`, as new runs (channels) get added to them;
+    /// the others are read again next time.
     async fn load_event_campaigns(&self, resp: &Value) {
         let now = now();
         let running: Vec<&Value> = resp["badges"]
@@ -389,26 +378,43 @@ impl Miner {
             })
             .collect();
         let mut campaigns = Vec::new();
+        let mut upcoming = Vec::new();
         let mut unknown = Vec::new();
         for badge in running {
             let (Some(id), Some(url)) = (badge["id"].as_str(), badge["streamdatabaseUrl"].as_str()) else {
                 continue;
             };
-            let cached = self.badges.event_pages.lock().unwrap().get(id).cloned();
-            let page = match cached {
-                Some(page) => Some(page),
+            let cached = self
+                .badges
+                .event_pages
+                .lock()
+                .unwrap()
+                .get(id)
+                .filter(|(at, _)| now - at < EVENT_PAGE_TTL_SECS)
+                .map(|(_, page)| page.clone());
+            // (page, freshly loaded)
+            let (page, fresh) = match cached {
+                Some(page) => (Some(page), false),
                 None => match self.load_event_page(url).await {
-                    Ok(page) => page,
+                    Ok(page) => (page, true),
                     Err(e) => {
                         warn!("Could not read how to earn the {} badge: {e:#}", badge["name"]);
-                        None
+                        // The last copy, if any, still says where to watch.
+                        (self.badges.event_pages.lock().unwrap().get(id).map(|(_, page)| page.clone()), false)
                     }
                 },
             };
             match page.as_ref().and_then(|p| Campaign::from_event_badge(badge, p)) {
                 Some(c) => {
-                    self.badges.event_pages.lock().unwrap().insert(id.to_string(), page.unwrap_or_default());
-                    campaigns.push(c);
+                    if fresh {
+                        self.badges.event_pages.lock().unwrap().insert(id.to_string(), (now, page.unwrap_or_default()));
+                    }
+                    // Only the run going on now counts; a later one shows once it starts.
+                    if c.dt_match() {
+                        campaigns.push(c);
+                    } else if c.start_at.timestamp() as f64 > now {
+                        upcoming.push(format!("{} from {}", c.name, c.start_at.format("%Y-%m-%d %H:%M UTC")));
+                    }
                 }
                 None => unknown.push(badge["name"].as_str().unwrap_or(id).to_string()),
             }
@@ -425,8 +431,9 @@ impl Miner {
             })
             .collect();
         info!(
-            "Event badges for watch time: {}{}",
+            "Event badges for watch time: {}{}{}",
             if found.is_empty() { "none".to_string() } else { found.join(", ") },
+            if upcoming.is_empty() { String::new() } else { format!("; later: {}", upcoming.join(", ")) },
             if unknown.is_empty() { String::new() } else { format!("; not for watch time or not described yet: {}", unknown.join(", ")) }
         );
         *self.badges.event_campaigns.write().unwrap() = campaigns;
@@ -442,28 +449,9 @@ impl Miner {
         self.badges.event_campaigns.read().unwrap().clone()
     }
 
-    /// Adds badge campaigns the drops inventory has in progress but the campaign list doesn't.
-    fn add_inventory_badges(&self, inventory: &Value) {
-        let events = self.badges.events.read().unwrap().clone();
-        let now = now();
-        let mut badges = self.badges.badges.write().unwrap();
-        for json in inventory["dropCampaignsInProgress"].as_array().into_iter().flatten() {
-            let Some(campaign) = Campaign::from_json(json) else { continue };
-            for mut badge in Badge::from_campaign(&campaign, &events) {
-                if badge.ends_at <= now || badges.iter().any(|b| b.drop_id == badge.drop_id) {
-                    continue;
-                }
-                info!("Found the {} badge drop in the drops inventory", badge.name);
-                badge.from_inventory = true;
-                badges.push(badge);
-            }
-        }
-    }
-
     /// Applies watch progress and earned badges from the drops inventory. A badge seen not earned
     /// before that is earned now goes in the session's earned list.
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
-        self.add_inventory_badges(inventory);
         // Which watched channel each campaign is earned on, for the earned list.
         // (channel id, login, game, campaign ids)
         let watched: Vec<(String, String, String, HashSet<String>)> = self
@@ -957,24 +945,25 @@ mod tests {
     }
 
     #[test]
-    fn reward_badges_go_by_game_and_named_channels() {
-        let reward = |allowed: Vec<(String, String)>| {
-            let mut c = Campaign::from_reward_json(&json!({
-                "id": "r1", "startsAt": "2020-01-01T00:00:00Z", "endsAt": "2099-01-01T00:00:00Z",
-                "game": { "id": "21779" },
-                "unlockRequirements": { "subsGoal": 0, "minuteWatchedGoal": 30 },
-                "rewards": [{ "id": "w1", "name": "K/DA Fan" }]
-            }))
-            .unwrap();
-            c.allowed_channels = allowed;
-            let events = HashMap::from([("k/da fan".to_string(), String::new())]);
-            Badge::from_campaign(&c, &events).remove(0)
+    fn event_badges_go_by_game_and_named_channels() {
+        let event = |channels: Value| {
+            let badge = json!({
+                "id": "kda-fan", "name": "K/DA Fan",
+                "startAt": "2020-01-01T00:00:00.000Z", "endAt": "2099-01-01T00:00:00.000Z", "free": true
+            });
+            let page = json!({ "props": { "pageProps": { "availabilities": [{
+                "objectives": [[{ "type": "twitch_watch", "minutes": 30, "days": null }]],
+                "categories": [{ "game": { "id": "21779", "name": "League of Legends" }, "slug": null }],
+                "channels": channels
+            }] } } });
+            let c = Campaign::from_event_badge(&badge, &page).unwrap();
+            Badge::from_campaign(&c, &HashMap::new()).remove(0)
         };
-        // Not listed among the channel's drops, which is fine for a reward campaign.
-        let any = reward(Vec::new());
+        // Not listed among the channel's drops, which is fine for an event badge.
+        let any = event(Value::Null);
         assert!(any.earnable_on("ch", Some("21779"), &[]));
         assert!(!any.earnable_on("ch", Some("1"), &[]));
-        let named = reward(vec![("42".into(), "samham".into())]);
+        let named = event(json!([{ "user": { "id": "42", "login": "samham" } }]));
         assert!(named.earnable_on("42", Some("21779"), &[]));
         assert!(!named.earnable_on("ch", Some("21779"), &[]));
     }
