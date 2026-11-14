@@ -109,6 +109,21 @@ pub(crate) fn parse_active_campaigns(resp: &Value) -> Result<Vec<Value>> {
         .collect())
 }
 
+/// The lowercase set ids and titles in an `availableBadges` read. An error, or no user, is an
+/// error rather than "owns nothing", so a failed read can't make owned badges show again.
+pub(crate) fn parse_owned_badges(resp: &Value) -> Result<HashSet<String>> {
+    let Some(badges) = resp["data"]["currentUser"]["availableBadges"].as_array() else {
+        bail!("unexpected response: {resp}");
+    };
+    Ok(badges
+        .iter()
+        .flat_map(|b| [b["setID"].as_str(), b["title"].as_str()])
+        .flatten()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect())
+}
+
 /// Campaign ids from the channels' reads, then the inventory's, each once, in first-seen order.
 pub(crate) fn merge_campaign_ids(channels: &[Vec<String>], inventory: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -600,6 +615,15 @@ impl Twitch {
             .gql(&VIEWER_DROPS_DASHBOARD.with(json!({ "fetchRewardCampaigns": true })))
             .await?;
         Ok(json!({ "inventory": inventory["data"], "dashboard": dashboard["data"] }))
+    }
+
+    /// The global chat badges the account owns, as lowercase set ids and titles (catquery's badge
+    /// ids are Twitch's set ids; the titles are a fallback).
+    pub async fn owned_badges(&self) -> Result<HashSet<String>> {
+        let resp = self
+            .gql(&json!({ "query": "query { currentUser { availableBadges { setID title } } }" }))
+            .await?;
+        parse_owned_badges(&resp)
     }
 
     pub async fn active_drop_campaigns(&self) -> Result<Vec<Value>> {

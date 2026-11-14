@@ -141,6 +141,15 @@ impl Badge {
             .collect()
     }
 
+    /// Whether the account has the badge already: by Twitch set id (an event badge's id, a drop's
+    /// benefit id) or by title.
+    fn owned_in(&self, owned: &HashSet<String>) -> bool {
+        let set_id = self.campaign_id.strip_prefix("event:").unwrap_or(&self.benefit_id);
+        [set_id, self.benefit_id.as_str(), self.name.as_str()]
+            .iter()
+            .any(|k| !k.trim().is_empty() && owned.contains(&k.trim().to_lowercase()))
+    }
+
     /// Whether a channel streaming `game_id` counts for the badge's game. A campaign without a
     /// game, or in a Special Events category, counts on any game.
     fn game_matches(&self, game_id: Option<&str>) -> bool {
@@ -203,6 +212,9 @@ pub(super) struct BadgeState {
     reward_done: Mutex<HashSet<String>>,
     /// Running event badges for watch time, see `load_event_campaigns`.
     event_campaigns: RwLock<Vec<Campaign>>,
+    /// The account's badges (lowercase set ids and titles), see `Twitch::owned_badges`. They
+    /// count as earned, so they're never shown or watched for. The last read stays on a failure.
+    owned: RwLock<HashSet<String>>,
     /// Streamdatabase pages that gave a watch goal, with when they were read, by badge id.
     event_pages: Mutex<HashMap<String, (f64, Value)>>,
 }
@@ -220,6 +232,7 @@ impl BadgeState {
             earned: Mutex::new(Vec::new()),
             reward_done: Mutex::new(serde_json::from_str(&read(REWARD_DONE_KEY)).unwrap_or_default()),
             event_campaigns: RwLock::new(Vec::new()),
+            owned: RwLock::new(HashSet::new()),
             event_pages: Mutex::new(HashMap::new()),
         }
     }
@@ -306,6 +319,7 @@ impl Miner {
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
         let events = self.badges.events.read().unwrap().clone();
         let done = self.badges.reward_done.lock().unwrap().clone();
+        let owned = self.badges.owned.read().unwrap().clone();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
             let fresh: Vec<Badge> = campaigns
@@ -322,7 +336,7 @@ impl Miner {
                             b.game = old.game.clone();
                         }
                     }
-                    b.earned |= b.reward && done.contains(&b.drop_id);
+                    b.earned |= (b.reward && done.contains(&b.drop_id)) || b.owned_in(&owned);
                     b
                 })
                 .collect();
@@ -349,6 +363,10 @@ impl Miner {
             let resp = self.twitch.http().get(EVENT_BADGES_URL).send().await?.error_for_status()?;
             Ok::<_, anyhow::Error>(resp.json::<Value>().await?)
         };
+        match self.twitch.owned_badges().await {
+            Ok(owned) => *self.badges.owned.write().unwrap() = owned,
+            Err(e) => warn!("Could not load the badges you already have: {e:#}"),
+        }
         match loaded.await {
             Ok(resp) => {
                 *self.badges.events.write().unwrap() = parse_event_badges(&resp, now());
@@ -480,6 +498,7 @@ impl Miner {
             .filter_map(|d| d["name"].as_str().map(|n| n.trim().to_lowercase()))
             .collect();
         let in_progress = inventory["dropCampaignsInProgress"].as_array();
+        let owned = self.badges.owned.read().unwrap().clone();
         for b in self.badges.badges.write().unwrap().iter_mut() {
             let (campaign_id, drop_id) = (b.campaign_id.as_str(), b.drop_id.as_str());
             let progress = in_progress
@@ -490,7 +509,8 @@ impl Miner {
                 .find(|d| d["id"].as_str() == Some(drop_id))
                 .map(|d| &d["self"]);
             let mut done = earned.contains(b.benefit_id.as_str())
-                || (b.campaign_id.starts_with("event:") && earned_names.contains(&b.name.trim().to_lowercase()));
+                || (b.campaign_id.starts_with("event:") && earned_names.contains(&b.name.trim().to_lowercase()))
+                || b.owned_in(&owned);
             if let Some(p) = progress {
                 b.minutes_watched = p["currentMinutesWatched"].as_i64().unwrap_or(b.minutes_watched);
                 done |= p["isClaimed"].as_bool() == Some(true);
@@ -942,6 +962,28 @@ mod tests {
         let game = &Badge::from_campaign(&drop_campaign("21779"), &HashMap::new())[0];
         assert!(game.earnable_on("ch", Some("21779"), &on));
         assert!(!game.earnable_on("ch", Some("509660"), &on));
+    }
+
+    #[test]
+    fn owned_badges_count_by_set_id_or_title() {
+        let resp = json!({ "data": { "currentUser": { "availableBadges": [
+            { "setID": "qsmp2", "title": "QSMP2" },
+            { "setID": "something-else", "title": "K/DA Fan " }
+        ] } } });
+        let owned = crate::twitch::parse_owned_badges(&resp).unwrap();
+        let event = |id: &str, name: &str| {
+            let badge = json!({ "id": id, "name": name, "startAt": "2020-01-01T00:00:00.000Z", "endAt": "2099-01-01T00:00:00.000Z" });
+            let page = json!({ "props": { "pageProps": { "availabilities": [{
+                "objectives": [[{ "type": "twitch_watch", "minutes": 60, "days": null }]], "categories": [], "channels": null
+            }] } } });
+            Badge::from_campaign(&Campaign::from_event_badge(&badge, &page).unwrap(), &HashMap::new()).remove(0)
+        };
+        assert!(event("qsmp2", "Renamed").owned_in(&owned));
+        assert!(event("kda-fan", "K/DA Fan").owned_in(&owned));
+        assert!(!event("clover", "Clover").owned_in(&owned));
+        // A failed read isn't "owns nothing".
+        assert!(crate::twitch::parse_owned_badges(&json!({ "data": { "currentUser": null } })).is_err());
+        assert!(crate::twitch::parse_owned_badges(&json!({ "errors": [{ "message": "x" }] })).is_err());
     }
 
     #[test]

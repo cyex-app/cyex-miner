@@ -57,7 +57,8 @@ the web UI:
   [catquery's event badge list](https://api.catquery.com/eventBadges). Where to watch (a category, or the
   channels named) and for how long come from each badge's streamdatabase page, read again every 20 minutes;
   a badge that runs several times uses the run going on now. Badges that need a subscription, purchase or
-  watching on several days aren't shown. Tick a badge to give its eligible live channels a watch slot
+  watching on several days aren't shown, nor are badges your account already has (read from Twitch with the
+  event list, by set id or name). Tick a badge to give its eligible live channels a watch slot
   through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. **Auto select
   badges** does all of it hands-off: every badge is picked as it starts, and when no channel in your list can
   earn one, live eligible channels are added for it (at most 10 per badge at a time; a try that finds none is
