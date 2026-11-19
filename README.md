@@ -64,7 +64,10 @@ the web UI:
   name). Badges for watching on several days (up to 14, like GTA VI's chains: 60 minutes on 2 to 6 days) are:
   where Twitch tracks one as a drop, its progress and lock are Twitch's (a drop for a later day waits until
   Twitch unlocks it); otherwise the miner counts each day, and the next one opens 24 hours (and 5 minutes)
-  after the last was in, as Twitch's daily reset does. Tick a badge to give its eligible live channels a watch slot
+  after the last was in, as Twitch's daily reset does. A series like the chains shows only its next badge, which
+  counts the days of the ones before it and opens 24 hours after the last was given (the miner keeps that time
+  across restarts, as Twitch's inventory doesn't list the chains); a day Twitch didn't count gets one spare day
+  before the miner gives up. Tick a badge to give its eligible live channels a watch slot
   through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. **Auto select
   badges** does all of it hands-off: every badge is picked as it starts, and when no channel in your list can
   earn one, live eligible channels are added for it (at most 10 per badge at a time; a try that finds none is

@@ -51,6 +51,10 @@ const REWARD_MARGIN_MINUTES: f64 = 5.0;
 /// `meta` key for the days watched for badges that ask for several (GTA VI's chains: 60 minutes
 /// on 2 to 6 days) that Twitch reports nothing for, by drop id, see `DayCount`.
 const REWARD_DAYS_KEY: &str = "reward_badge_days";
+/// `meta` key for when the badges of a series were given, by drop id (see `Badge::awarded_at`).
+/// Twitch doesn't list some (GTA VI's chains) in the inventory, so a restart would forget when
+/// the last day was earned, and with it when the next one opens.
+const REWARD_AWARDED_KEY: &str = "reward_badge_awarded";
 /// A badge's next day opens this long after the previous day's minutes were earned (Twitch's
 /// daily reset), plus a few minutes so none are watched before it does.
 const BADGE_DAY_SECS: f64 = 24.0 * 60.0 * 60.0 + 5.0 * 60.0;
@@ -160,6 +164,65 @@ struct Badge {
     days: DayCount,
     /// Twitch says its drop isn't unlocked yet (`hasPreconditionsMet` false): not watched for.
     locked: bool,
+    /// When its window starts, for grouping a series (see `update_series`).
+    starts_at: f64,
+    /// When Twitch gave it (the inventory's `lastAwardedAt`), or when the miner saw it earned; 0
+    /// when not known. The next badge of its series waits 24 hours after it.
+    awarded_at: f64,
+    /// A later badge of a series (GTA VI's chains): not shown or watched for until the ones
+    /// before it are earned, see `update_series`.
+    queued: bool,
+    /// The first badge of a series waits until 24 hours after the one before it was given, as
+    /// Twitch's daily reset does; 0 when it isn't waiting.
+    series_wait_until: f64,
+}
+
+/// Groups badges that are one series: the same game and window, asking for a different number
+/// of days each (GTA VI's chains: Purple on 1 day, Bronze on 2, ... Miami on 6). Only the first
+/// not earned yet is shown and watched for (`queued` marks the rest), and it waits 24 hours
+/// after the one before it was given (`series_wait_until`).
+fn update_series(badges: &mut [Badge]) {
+    let key = |b: &Badge| {
+        (b.reward && !b.game_id.is_empty()).then(|| format!("{}|{}|{}", b.game_id, b.starts_at as i64, b.ends_at as i64))
+    };
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, b) in badges.iter().enumerate() {
+        if let Some(k) = key(b) {
+            groups.entry(k).or_default().push(i);
+        }
+    }
+    for b in badges.iter_mut() {
+        b.queued = false;
+        b.series_wait_until = 0.0;
+    }
+    for mut members in groups.into_values() {
+        // A series asks for a different number of days in each badge; badges that just share a
+        // game and window (two 30-minute badges) aren't one.
+        let days: HashSet<i64> = members.iter().map(|&i| badges[i].days_required).collect();
+        if members.len() < 2 || days.len() != members.len() {
+            continue;
+        }
+        members.sort_by_key(|&i| badges[i].days_required);
+        let Some(head) = members.iter().position(|&i| !badges[i].done()) else { continue };
+        for &i in &members[head + 1..] {
+            badges[i].queued = !badges[i].done();
+        }
+        if head > 0 {
+            let (before, days_before) = {
+                let b = &badges[members[head - 1]];
+                (b.awarded_at, b.days_required)
+            };
+            let next = &mut badges[members[head]];
+            if before > 0.0 {
+                next.series_wait_until = before + BADGE_DAY_SECS;
+            }
+            // The days of the badges before it count toward it on Twitch (Bronze's 2 days are
+            // Purple's day and one more), so the miner's own count starts there.
+            if next.days.days_done < days_before {
+                next.days = DayCount { minutes: 0.0, days_done: days_before, last_done_at: before };
+            }
+        }
+    }
 }
 
 impl Badge {
@@ -196,6 +259,10 @@ impl Badge {
                     days_required: drop.days_required.max(1),
                     days: DayCount::default(),
                     locked: false,
+                    starts_at: drop.start_at.max(c.start_at).timestamp() as f64,
+                    awarded_at: 0.0,
+                    queued: false,
+                    series_wait_until: 0.0,
                 }
             })
             .collect()
@@ -219,13 +286,21 @@ impl Badge {
     /// until the next day opens, 24 hours after. Twitch's own count, where it has one, decides
     /// instead (a drop for the next day is locked until then).
     fn done_today(&self, now: f64) -> bool {
-        self.days_required > 1 && !self.twitch_tracked && self.days.waiting_until(now).is_some()
+        (self.days_required > 1 && !self.twitch_tracked && self.days.waiting_until(now).is_some())
+            || now < self.series_wait_until
+    }
+
+    /// When it's watched for again, while it waits for the next day; 0 otherwise.
+    fn next_day_at(&self, now: f64) -> f64 {
+        let own = if self.twitch_tracked { None } else { self.days.waiting_until(now) };
+        let series = (now < self.series_wait_until).then_some(self.series_wait_until);
+        own.into_iter().chain(series).fold(0.0, f64::max)
     }
 
     /// Whether it's worth watching for right now: not earned or given up on, unlocked on Twitch,
-    /// and today's minutes not in yet.
+    /// next in its series, and the day's minutes not in yet.
     fn wanted(&self, now: f64) -> bool {
-        !self.done() && !self.locked && !self.done_today(now)
+        !self.done() && !self.locked && !self.queued && !self.done_today(now)
     }
 
     /// Whether a channel streaming `game_id` counts for the badge's game. A campaign without a
@@ -328,6 +403,8 @@ pub(super) struct BadgeState {
     reward_done: Mutex<HashSet<String>>,
     /// Day counts of badges on several days, see `REWARD_DAYS_KEY`.
     reward_days: Mutex<HashMap<String, DayCount>>,
+    /// When badges were given, see `REWARD_AWARDED_KEY`.
+    awarded: Mutex<HashMap<String, f64>>,
     /// Running event badges for watch time, see `load_event_campaigns`.
     event_campaigns: RwLock<Vec<Campaign>>,
     /// The account's badges (lowercase set ids and titles), see `Twitch::owned_badges`. They
@@ -350,6 +427,7 @@ impl BadgeState {
             earned: Mutex::new(Vec::new()),
             reward_done: Mutex::new(serde_json::from_str(&read(REWARD_DONE_KEY)).unwrap_or_default()),
             reward_days: Mutex::new(serde_json::from_str(&read(REWARD_DAYS_KEY)).unwrap_or_default()),
+            awarded: Mutex::new(serde_json::from_str(&read(REWARD_AWARDED_KEY)).unwrap_or_default()),
             event_campaigns: RwLock::new(Vec::new()),
             owned: RwLock::new(HashSet::new()),
             event_pages: Mutex::new(HashMap::new()),
@@ -463,7 +541,7 @@ impl Miner {
         let badges = self.badges.badges.read().unwrap();
         let view = badges
             .iter()
-            .filter(|b| !b.earned && current(&badges, &b.campaign_id).is_some_and(|c| c.drop_id == b.drop_id))
+            .filter(|b| !b.earned && !b.queued && current(&badges, &b.campaign_id).is_some_and(|c| c.drop_id == b.drop_id))
             .map(|b| BadgeView {
                 campaign_id: b.campaign_id.clone(),
                 name: b.name.clone(),
@@ -490,7 +568,7 @@ impl Miner {
                 days_required: b.days_required,
                 days_done: b.days.days_done,
                 done_today: b.done_today(now()),
-                next_day_at: if b.done_today(now()) { b.days.waiting_until(now()).unwrap_or(0.0) } else { 0.0 },
+                next_day_at: b.next_day_at(now()),
                 locked: b.locked,
             })
             .collect();
@@ -526,6 +604,7 @@ impl Miner {
         let events = self.badges.events.read().unwrap().clone();
         let done = self.badges.reward_done.lock().unwrap().clone();
         let days = self.badges.reward_days.lock().unwrap().clone();
+        let awarded = self.badges.awarded.lock().unwrap().clone();
         let owned = self.badges.owned.read().unwrap().clone();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
@@ -542,6 +621,7 @@ impl Miner {
                         b.twitch_tracked = old.twitch_tracked;
                         b.stopped = old.stopped;
                         b.days = old.days.clone();
+                        b.awarded_at = old.awarded_at;
                         b.locked = old.locked;
                         if b.twitch_tracked {
                             b.minutes_required = old.minutes_required;
@@ -555,6 +635,9 @@ impl Miner {
                     // seen, takes over again.
                     b.earned |= b.owned_in(&owned);
                     b.stopped |= b.reward && !b.twitch_tracked && done.contains(&b.drop_id);
+                    if b.awarded_at == 0.0 {
+                        b.awarded_at = awarded.get(&b.drop_id).copied().unwrap_or(0.0);
+                    }
                     // Days counted before a restart.
                     if b.days == DayCount::default() {
                         if let Some(d) = days.get(&b.drop_id) {
@@ -565,6 +648,7 @@ impl Miner {
                 })
                 .collect();
             *badges = fresh;
+            update_series(&mut badges);
             badges.iter().map(|b| b.campaign_id.clone()).collect()
         };
         let saved = {
@@ -750,11 +834,26 @@ impl Miner {
             .flatten()
             .filter_map(|d| d["name"].as_str().map(|n| n.trim().to_lowercase()))
             .collect();
+        // When Twitch gave each of them, for the 24 hours the next badge of a series waits.
+        let awarded: HashMap<String, f64> = inventory["gameEventDrops"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|d| {
+                let at = chrono::DateTime::parse_from_rfc3339(d["lastAwardedAt"].as_str()?).ok()?;
+                Some((d["name"].as_str()?.trim().to_lowercase(), at.timestamp() as f64))
+            })
+            .collect();
         let in_progress = inventory["dropCampaignsInProgress"].as_array();
         let owned = self.badges.owned.read().unwrap().clone();
         // A given up badge Twitch shows unfinished: saved, so a restart doesn't give up on it again.
         let mut revived = false;
-        for b in self.badges.badges.write().unwrap().iter_mut() {
+        let mut badges = self.badges.badges.write().unwrap();
+        let awarded_before: Vec<f64> = badges.iter().map(|b| b.awarded_at).collect();
+        for b in badges.iter_mut() {
+            if let Some(&at) = awarded.get(&b.name.trim().to_lowercase()) {
+                b.awarded_at = at;
+            }
             let (campaign_id, drop_id) = (b.campaign_id.as_str(), b.drop_id.as_str());
             let progress = in_progress
                 .into_iter()
@@ -814,8 +913,20 @@ impl Miner {
                     channel: channel.map(|(_, login, _, _, _)| login.clone()),
                 });
             }
+            // Seen earned this session without Twitch saying when: from now. (One earned before the
+            // miner started has no time; the next of its series doesn't wait then, rather than
+            // losing a day.)
+            if done && !b.earned && b.seen_unearned && b.awarded_at == 0.0 {
+                b.awarded_at = now();
+            }
             b.earned |= done;
             b.seen_unearned |= !done;
+        }
+        update_series(&mut badges);
+        let awarded_changed = badges.iter().map(|b| b.awarded_at).ne(awarded_before);
+        drop(badges);
+        if awarded_changed {
+            self.save_reward_awarded();
         }
         for e in &newly {
             match &e.channel {
@@ -895,8 +1006,10 @@ impl Miner {
                     b.days.days_done += 1;
                     b.days.last_done_at = now;
                     days_changed = true;
-                    // A day past the days asked for without Twitch confirming it: given up on.
-                    if b.days.days_done > b.days_required {
+                    // Two days past the days asked for without Twitch confirming it: given up on.
+                    // One spare day, for a day the miner counted that Twitch didn't (one earned
+                    // before the miner knew, so it couldn't tell when the next day opened).
+                    if b.days.days_done > b.days_required + 1 {
                         b.stopped = true;
                         stopped.push((b.name.clone(), b.days.days_done * b.minutes_required));
                     } else {
@@ -950,6 +1063,20 @@ impl Miner {
         };
         if let Err(e) = self.store.set_meta(REWARD_DAYS_KEY, &json) {
             warn!("Could not save the badge day counts: {e:#}");
+        }
+    }
+
+    /// Saves when badges were given, see `REWARD_AWARDED_KEY`.
+    fn save_reward_awarded(&self) {
+        let json = {
+            let badges = self.badges.badges.read().unwrap();
+            let mut awarded = self.badges.awarded.lock().unwrap();
+            // Badges no longer listed keep theirs, in case they come back (a source down).
+            awarded.extend(badges.iter().filter(|b| b.awarded_at > 0.0).map(|b| (b.drop_id.clone(), b.awarded_at)));
+            serde_json::to_string(&*awarded).unwrap_or_default()
+        };
+        if let Err(e) = self.store.set_meta(REWARD_AWARDED_KEY, &json) {
+            warn!("Could not save when the badges were given: {e:#}");
         }
     }
 

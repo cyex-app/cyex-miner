@@ -415,15 +415,17 @@ fn bronze_chain_is_listed_and_follows_twitch() {
     let h = Harness::new();
     let psp1g = h.live("psp1g", "100", GTA);
     h.badges(&[daily("purple-chain", "Purple Chain", 60, 1), daily("bronze-chain", "Bronze Chain", 60, 2)]);
-    let bronze = h.view("event:bronze-chain").expect("Bronze Chain listed");
-    assert_eq!((bronze.minutes_required, bronze.days_required), (60, 2));
-    assert!(bronze.picked);
+    // A series: Bronze waits behind Purple, picked already.
+    assert!(h.view("event:bronze-chain").is_none());
 
-    // As in the screenshot: Purple claimed, Bronze at 54 of 60.
+    // As in the screenshot: Purple claimed (before the miner started, so no 24 hours to wait),
+    // Bronze at 54 of 60.
     psp1g.state().watching = true;
     h.miner.update_badge_progress(&chain_inventory(&[("Purple Chain", 60, true, true), ("Bronze Chain", 54, false, true)]));
     h.miner.update_badge_targets();
-    let bronze = h.view("event:bronze-chain").unwrap();
+    let bronze = h.view("event:bronze-chain").expect("Bronze Chain listed once Purple is done");
+    assert_eq!((bronze.minutes_required, bronze.days_required), (60, 2));
+    assert!(bronze.picked);
     assert_eq!(bronze.minutes_watched, 54);
     assert!(!bronze.locked && !bronze.done_today);
     assert!(psp1g.state().badge_drop, "watched for its last 6 minutes");
@@ -443,20 +445,29 @@ fn a_chain_drop_twitch_hasnt_unlocked_waits() {
     let h = Harness::new();
     let psp1g = h.live("psp1g", "100", GTA);
     h.badges(&[daily("bronze-chain", "Bronze Chain", 60, 2), daily("silver-chain", "Silver Chain", 60, 3)]);
-    // Bronze in progress; Silver waits for its day (hasPreconditionsMet false).
+    // Bronze in progress; Silver waits behind it, and for its day (hasPreconditionsMet false).
     h.miner.update_badge_progress(&chain_inventory(&[("Bronze Chain", 10, false, true), ("Silver Chain", 0, false, false)]));
     h.miner.update_badge_targets();
-    let silver = h.view("event:silver-chain").unwrap();
-    assert!(silver.locked);
+    assert!(h.view("event:silver-chain").is_none(), "behind Bronze in the series");
     assert!(psp1g.state().badge_drop, "Bronze still needs it");
 
-    // Bronze done: only the locked Silver is left, so the channel isn't watched for a badge.
+    // Bronze done (no time given): Silver shows, but Twitch has it locked, so nothing is watched.
     h.miner.update_badge_progress(&chain_inventory(&[("Bronze Chain", 60, true, true), ("Silver Chain", 0, false, false)]));
     h.miner.update_badge_targets();
+    assert!(h.view("event:silver-chain").unwrap().locked);
     assert!(!psp1g.state().badge_drop, "no watching toward a locked drop");
 
-    // Silver unlocks a day later: watched for again.
+    // Unlocked on Twitch, but Bronze was given just now: the daily reset is 24 hours after it.
     h.miner.update_badge_progress(&chain_inventory(&[("Bronze Chain", 60, true, true), ("Silver Chain", 0, false, true)]));
+    h.miner.update_badge_targets();
+    assert!(h.view("event:silver-chain").unwrap().done_today);
+    assert!(!psp1g.state().badge_drop);
+
+    // A day later (Twitch giving Bronze's time now): watched for again.
+    let mut later = chain_inventory(&[("Bronze Chain", 60, true, true), ("Silver Chain", 0, false, true)]);
+    let given = chrono::DateTime::from_timestamp((now() - 24.2 * 3600.0) as i64, 0).unwrap().to_rfc3339();
+    later["gameEventDrops"] = json!([{ "id": "b", "name": "Bronze Chain", "lastAwardedAt": given }]);
+    h.miner.update_badge_progress(&later);
     h.miner.update_badge_targets();
     assert!(!h.view("event:silver-chain").unwrap().locked);
     assert!(psp1g.state().badge_drop);
@@ -509,7 +520,12 @@ fn a_badge_on_several_days_twitch_says_nothing_about_waits_24_hours_a_day() {
     assert_eq!(v.days_done, 2);
     assert!(!v.earned, "only Twitch's word earns it");
 
-    // A day past the two without Twitch confirming it: given up on.
+    // A spare day past the two (for a day Twitch didn't count), then given up on.
+    age_day(&h, "event:bronze-chain", 25.0);
+    h.miner.update_badge_targets();
+    h.watch(&psp1g, 65);
+    let v = h.view("event:bronze-chain").unwrap();
+    assert!(v.days_done == 3 && !v.unconfirmed, "one spare day");
     age_day(&h, "event:bronze-chain", 25.0);
     h.miner.update_badge_targets();
     h.watch(&psp1g, 65);
@@ -522,4 +538,148 @@ fn a_badge_on_several_days_twitch_says_nothing_about_waits_24_hours_a_day() {
         "dropCampaignsInProgress": [], "gameEventDrops": [{ "id": "x", "name": "Bronze Chain" }]
     }));
     assert_eq!(earned_names(&h), ["Bronze Chain"]);
+}
+
+/// GTA VI's chains as both badge lists have them: the same game and window, 1 to 6 days.
+fn chains() -> Vec<Campaign> {
+    [("purple-chain", "Purple Chain", 1), ("bronze-chain", "Bronze Chain", 2), ("silver-chain", "Silver Chain", 3),
+     ("gold-chain", "Gold Chain", 4), ("diamond-chain", "Diamond Chain", 5), ("miami-chain", "Miami Chain", 6)]
+    .iter()
+    .map(|&(id, name, days)| daily(id, name, 60, days))
+    .collect()
+}
+
+/// The inventory with these badges given (name, hours ago) and every chain drop at `minutes`.
+fn chains_inventory(given: &[(&str, f64)], minutes: i64) -> Value {
+    let at = |hours: f64| {
+        chrono::DateTime::from_timestamp((now() - hours * 3600.0) as i64, 0).unwrap().to_rfc3339()
+    };
+    let names = ["Purple Chain", "Bronze Chain", "Silver Chain", "Gold Chain", "Diamond Chain", "Miami Chain"];
+    let drops: Vec<Value> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let claimed = given.iter().any(|(n, _)| n == name);
+            json!({
+                "id": format!("drop-{i}"), "requiredMinutesWatched": 60,
+                "self": { "currentMinutesWatched": if claimed { 60 } else { minutes }, "isClaimed": claimed },
+                "benefitEdges": [{ "benefit": { "id": format!("b-{i}"), "name": name } }]
+            })
+        })
+        .collect();
+    let events: Vec<Value> = given
+        .iter()
+        .map(|(name, hours)| json!({ "id": name, "name": name, "lastAwardedAt": at(*hours) }))
+        .collect();
+    json!({ "dropCampaignsInProgress": [{ "id": "gta-drops", "timeBasedDrops": drops }], "gameEventDrops": events })
+}
+
+fn shown(h: &Harness) -> Vec<String> {
+    h.miner.badges().into_iter().map(|b| b.name).collect()
+}
+
+#[test]
+fn a_series_shows_only_its_next_badge_after_the_daily_reset() {
+    // As in the screenshot: Purple and Bronze given (Bronze 3 hours ago), the rest at 35/60.
+    let h = Harness::new();
+    let psp1g = h.live("psp1g", "100", GTA);
+    h.badges(&chains());
+    assert_eq!(shown(&h), ["Purple Chain"], "only the first one before anything's known");
+
+    h.miner.update_badge_progress(&chains_inventory(&[("Purple Chain", 27.0), ("Bronze Chain", 3.0)], 35));
+    h.miner.update_badge_targets();
+    assert_eq!(shown(&h), ["Silver Chain"], "the next one only, not Gold and Diamond too");
+    let silver = h.view("event:silver-chain").unwrap();
+    assert!(silver.done_today, "today's is in: Bronze was given 3 hours ago");
+    let wait = silver.next_day_at - now();
+    assert!((20.9 * 3600.0..21.2 * 3600.0).contains(&wait), "24 hours after Bronze, plus 5 minutes: {wait}");
+    assert!(!psp1g.state().badge_drop, "nothing watched until then");
+
+    // 24 hours after Bronze: Silver is watched for.
+    h.miner.update_badge_progress(&chains_inventory(&[("Purple Chain", 51.0), ("Bronze Chain", 24.2)], 35));
+    h.miner.update_badge_targets();
+    assert!(!h.view("event:silver-chain").unwrap().done_today);
+    assert!(psp1g.state().badge_drop);
+
+    // Silver given: Gold next, waiting its own 24 hours.
+    psp1g.state().watching = true;
+    h.miner.update_badge_progress(&chains_inventory(&[("Purple Chain", 51.0), ("Bronze Chain", 24.2), ("Silver Chain", 0.0)], 0));
+    h.miner.update_badge_targets();
+    assert_eq!(shown(&h), ["Gold Chain"]);
+    assert!(h.view("event:gold-chain").unwrap().done_today);
+    assert!(!psp1g.state().badge_drop);
+    assert_eq!(earned_names(&h), ["Silver Chain"]);
+}
+
+#[test]
+fn a_series_earned_before_the_miner_started_doesnt_wait_a_day() {
+    // Bronze owned with no time known (Twitch's badge list, not the inventory): Silver is
+    // watched for right away rather than losing a day.
+    let h = Harness::new();
+    let psp1g = h.live("psp1g", "100", GTA);
+    *h.miner.badges.owned.write().unwrap() = ["purple-chain".to_string(), "bronze-chain".to_string()].into();
+    h.badges(&chains());
+    h.miner.update_badge_progress(&json!({ "dropCampaignsInProgress": [], "gameEventDrops": [] }));
+    h.miner.update_badge_targets();
+    assert_eq!(shown(&h), ["Silver Chain"]);
+    assert!(!h.view("event:silver-chain").unwrap().done_today);
+    assert!(psp1g.state().badge_drop);
+}
+
+#[test]
+fn badges_sharing_a_game_and_window_arent_a_series_by_that_alone() {
+    // Two one-day badges in League of Legends with the same window: both shown and watched for.
+    let h = Harness::new();
+    h.live("faker", "200", LOL);
+    h.badges(&[
+        event("kda-fan", "K/DA Fan", 30, Some(LOL), Value::Null),
+        event("worlds", "Worlds", 60, Some(LOL), Value::Null),
+    ]);
+    let mut names = shown(&h);
+    names.sort();
+    assert_eq!(names, ["K/DA Fan", "Worlds"]);
+}
+
+#[test]
+fn the_next_chain_waits_for_the_daily_reset_across_a_restart() {
+    // What went wrong: Twitch's inventory doesn't list the chains, only its badge list says
+    // Purple is owned, with no time. The miner saw it given at noon; a redeploy forgot that.
+    let h = Harness::new();
+    let psp1g = h.live("psp1g", "100", GTA);
+    let empty = json!({ "dropCampaignsInProgress": [], "gameEventDrops": [] });
+    h.badges(&chains());
+    h.miner.update_badge_progress(&empty);
+    *h.miner.badges.owned.write().unwrap() = ["purple-chain".to_string()].into();
+    h.miner.update_badge_progress(&empty);
+    h.miner.update_badge_targets();
+    assert_eq!(shown(&h), ["Bronze Chain"]);
+    let bronze = h.view("event:bronze-chain").unwrap();
+    assert_eq!((bronze.days_done, bronze.days_required), (1, 2), "Purple's day counts toward Bronze");
+    assert!(bronze.done_today && !psp1g.state().badge_drop);
+
+    let h = h.restart(&chains());
+    *h.miner.badges.owned.write().unwrap() = ["purple-chain".to_string()].into();
+    let psp1g = h.live("psp1g", "100", GTA);
+    h.miner.update_badge_progress(&empty);
+    h.miner.update_badge_targets();
+    let bronze = h.view("event:bronze-chain").unwrap();
+    assert!(bronze.done_today, "the restart remembers when Purple was given");
+    let wait = bronze.next_day_at - now();
+    assert!((23.9 * 3600.0..24.2 * 3600.0).contains(&wait), "{wait}");
+    assert!(!psp1g.state().badge_drop);
+
+    // 24 hours later: one more day of 65 minutes and Bronze's days are in; Twitch owning it earns it.
+    for b in h.miner.badges.badges.write().unwrap().iter_mut() {
+        b.awarded_at -= 24.2 * 3600.0;
+        b.days.last_done_at -= 24.2 * 3600.0;
+    }
+    h.miner.update_badge_progress(&empty);
+    h.miner.update_badge_targets();
+    assert!(psp1g.state().badge_drop);
+    h.watch(&psp1g, 65);
+    assert_eq!(h.view("event:bronze-chain").unwrap().days_done, 2);
+    *h.miner.badges.owned.write().unwrap() = ["purple-chain".to_string(), "bronze-chain".to_string()].into();
+    h.miner.update_badge_progress(&empty);
+    assert_eq!(shown(&h), ["Silver Chain"]);
+    assert_eq!(h.view("event:silver-chain").unwrap().days_done, 2);
 }
