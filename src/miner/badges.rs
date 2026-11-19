@@ -1,8 +1,9 @@
-//! Badges for watch time, from catquery's event badge list (`EVENT_BADGES_URL`): each free,
-//! running badge's streamdatabase page says where to watch (a category, or named channels) and
-//! for how long. Live channels that can earn a picked badge are watched alone, ahead of every
-//! other rule. Channels can be quick-added for a badge; those are removed again once it's earned
-//! or it ends.
+//! Badges for watch time, from catquery's event badge list (`EVENT_BADGES_URL`) and
+//! streamdatabase's global badge list (`STREAMDATABASE_LIST_URL`), merged so each badge is there
+//! once: each free, running badge's streamdatabase page says where to watch (a category, or named
+//! channels) and for how long. Live channels that can earn a picked badge are watched alone, ahead
+//! of every other rule, apart from short breaks for pending watch streaks. Channels can be
+//! quick-added for a badge; those are removed again once it's earned or it ends.
 
 use std::{
     cmp::Reverse,
@@ -15,7 +16,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{info, warn};
 
 use super::Miner;
@@ -41,11 +42,18 @@ const AUTO_KEY: &str = "badges_auto";
 const AUTO_ADD_RETRY_SECS: f64 = 30.0 * 60.0;
 /// A quick-added channel offline this long is removed, making room for live ones.
 const BADGE_CHANNEL_OFFLINE_SECS: f64 = 10.0 * 60.0;
-/// `meta` key for the reward badges (by drop id) watched to their goal. Twitch doesn't report
-/// them back, so this keeps them from being watched again after a restart.
+/// `meta` key for the reward badges (by drop id) the miner stopped watching for: watched well
+/// past their goal without Twitch confirming them, so they aren't watched again after a restart.
 const REWARD_DONE_KEY: &str = "reward_badges_done";
-/// Minutes watched past a reward badge's goal before it counts as earned, as Twitch's count lags.
+/// Minutes past twice its goal a badge Twitch reports no progress for is watched before the miner
+/// gives up on it. It isn't counted as earned then; only Twitch's word counts.
 const REWARD_MARGIN_MINUTES: f64 = 5.0;
+/// `meta` key for the days watched for badges that ask for several (GTA VI's chains: 60 minutes
+/// on 2 to 6 days) that Twitch reports nothing for, by drop id, see `DayCount`.
+const REWARD_DAYS_KEY: &str = "reward_badge_days";
+/// A badge's next day opens this long after the previous day's minutes were earned (Twitch's
+/// daily reset), plus a few minutes so none are watched before it does.
+const BADGE_DAY_SECS: f64 = 24.0 * 60.0 * 60.0 + 5.0 * 60.0;
 /// Twitch's "Special Events" categories: a campaign filed under one is earned on its channels
 /// whatever they stream (TwitchDropsMiner treats them the same way).
 const SPECIAL_GAME_IDS: [&str; 2] = ["509663", "509672"];
@@ -66,6 +74,41 @@ pub struct BadgeView {
     pub allowed_channels: usize,
     /// Quick-added channels still in the list.
     pub added_channels: usize,
+    /// Watched well past its goal without Twitch confirming it; no longer watched for until
+    /// picked again or channels are added for it.
+    pub unconfirmed: bool,
+    /// Days to watch `minutes_required` on; 1 for most badges.
+    pub days_required: i64,
+    /// Days the miner counted for a badge Twitch reports nothing for; 0 otherwise.
+    pub days_done: i64,
+    /// Today's minutes are in (a badge watched on several days): watched for again from
+    /// `next_day_at`.
+    pub done_today: bool,
+    /// When the next day of a badge on several days opens (24 hours after the last one was
+    /// earned); 0 when it isn't waiting.
+    pub next_day_at: f64,
+    /// Twitch says the drop isn't unlocked yet (an earlier one first, or a later day).
+    pub locked: bool,
+}
+
+/// The days counted for a badge watched on several days, see `REWARD_DAYS_KEY`. A day's
+/// minutes count once its goal is met; the next day opens 24 hours after that, as on Twitch.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct DayCount {
+    /// Minutes watched for the day going on.
+    minutes: f64,
+    /// Days whose minutes were watched.
+    days_done: i64,
+    /// When the last day's minutes were in; 0 before the first.
+    last_done_at: f64,
+}
+
+impl DayCount {
+    /// When the next day opens, while it hasn't yet.
+    fn waiting_until(&self, now: f64) -> Option<f64> {
+        let next = self.last_done_at + BADGE_DAY_SECS;
+        (self.last_done_at > 0.0 && now < next).then_some(next)
+    }
 }
 
 /// A badge earned while the miner runs, for the web UI.
@@ -100,11 +143,23 @@ struct Badge {
     earned: bool,
     /// Seen not earned in the inventory, so earning it now happened this session.
     seen_unearned: bool,
-    /// From a reward campaign: earned on live channels in its game (or the channels it names),
-    /// whatever drops they list. Its minutes are counted here.
+    /// An event badge: earned on live channels in its game (or the channels it names),
+    /// whatever drops they list.
     reward: bool,
-    /// Minutes watched for a reward badge, counted by the miner.
+    /// Minutes watched for a reward badge, counted by the miner while Twitch reports none.
     reward_minutes: f64,
+    /// A reward badge whose progress Twitch reports in the drops inventory (a drop giving a
+    /// reward of the same name): Twitch's minutes count, not the miner's.
+    twitch_tracked: bool,
+    /// A reward badge watched well past its goal without Twitch confirming it: not watched for
+    /// anymore, but not earned either.
+    stopped: bool,
+    /// Days to watch `minutes_required` on (each day); 1 for most badges.
+    days_required: i64,
+    /// The miner's own day count, for a badge on several days Twitch reports nothing for.
+    days: DayCount,
+    /// Twitch says its drop isn't unlocked yet (`hasPreconditionsMet` false): not watched for.
+    locked: bool,
 }
 
 impl Badge {
@@ -136,6 +191,11 @@ impl Badge {
                     seen_unearned: false,
                     reward: c.reward,
                     reward_minutes: 0.0,
+                    twitch_tracked: false,
+                    stopped: false,
+                    days_required: drop.days_required.max(1),
+                    days: DayCount::default(),
+                    locked: false,
                 }
             })
             .collect()
@@ -148,6 +208,24 @@ impl Badge {
         [set_id, self.benefit_id.as_str(), self.name.as_str()]
             .iter()
             .any(|k| !k.trim().is_empty() && owned.contains(&k.trim().to_lowercase()))
+    }
+
+    /// Earned, or given up on: nothing left to watch for.
+    fn done(&self) -> bool {
+        self.earned || self.stopped
+    }
+
+    /// A badge on several days whose minutes for the day the miner counted already: it waits
+    /// until the next day opens, 24 hours after. Twitch's own count, where it has one, decides
+    /// instead (a drop for the next day is locked until then).
+    fn done_today(&self, now: f64) -> bool {
+        self.days_required > 1 && !self.twitch_tracked && self.days.waiting_until(now).is_some()
+    }
+
+    /// Whether it's worth watching for right now: not earned or given up on, unlocked on Twitch,
+    /// and today's minutes not in yet.
+    fn wanted(&self, now: f64) -> bool {
+        !self.done() && !self.locked && !self.done_today(now)
     }
 
     /// Whether a channel streaming `game_id` counts for the badge's game. A campaign without a
@@ -176,15 +254,53 @@ fn current<'a>(badges: &'a [Badge], campaign_id: &str) -> Option<&'a Badge> {
     let of_campaign = badges.iter().filter(|b| b.campaign_id == campaign_id);
     of_campaign
         .clone()
-        .filter(|b| !b.earned)
+        .filter(|b| !b.done())
         .min_by_key(|b| b.minutes_required)
         .or_else(|| of_campaign.max_by_key(|b| b.minutes_required))
 }
 
 /// Campaigns with a badge left to earn.
 fn open_campaigns(badges: &[Badge]) -> HashSet<String> {
-    badges.iter().filter(|b| !b.earned).map(|b| b.campaign_id.clone()).collect()
+    badges.iter().filter(|b| !b.done()).map(|b| b.campaign_id.clone()).collect()
 }
+
+/// Twitch's own progress toward a badge, from the drops inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TwitchProgress {
+    pub minutes: i64,
+    pub required: i64,
+    pub claimed: bool,
+    /// `hasPreconditionsMet` false: the drop waits for an earlier one, or a later day.
+    pub locked: bool,
+}
+
+/// Twitch's own progress toward a badge named `name`, from the drops inventory's campaigns in
+/// progress: the drop giving a reward of that name. Event and reward badges carry no Twitch drop
+/// id, so they're matched by name.
+pub(crate) fn inventory_progress(inventory: &Value, name: &str) -> Option<TwitchProgress> {
+    let name = name.trim().to_lowercase();
+    inventory["dropCampaignsInProgress"]
+        .as_array()?
+        .iter()
+        .flat_map(|c| c["timeBasedDrops"].as_array().into_iter().flatten())
+        .find(|d| {
+            d["benefitEdges"].as_array().into_iter().flatten().any(|e| {
+                e["benefit"]["name"].as_str().is_some_and(|n| n.trim().to_lowercase() == name)
+            })
+        })
+        .map(|d| {
+            let p = &d["self"];
+            TwitchProgress {
+                minutes: p["currentMinutesWatched"].as_i64().unwrap_or(0),
+                required: d["requiredMinutesWatched"].as_i64().unwrap_or(0),
+                claimed: p["isClaimed"].as_bool() == Some(true),
+                locked: p["hasPreconditionsMet"].as_bool() == Some(false),
+            }
+        })
+}
+
+/// A channel watched for a badge: (channel id, login, game name, game id, campaign ids).
+type WatchedChannel = (String, String, String, Option<String>, Vec<String>);
 
 /// A channel the quick add put in the list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,6 +326,8 @@ pub(super) struct BadgeState {
     earned: Mutex<Vec<EarnedBadge>>,
     /// Reward badges watched to their goal, by drop id, see `REWARD_DONE_KEY`.
     reward_done: Mutex<HashSet<String>>,
+    /// Day counts of badges on several days, see `REWARD_DAYS_KEY`.
+    reward_days: Mutex<HashMap<String, DayCount>>,
     /// Running event badges for watch time, see `load_event_campaigns`.
     event_campaigns: RwLock<Vec<Campaign>>,
     /// The account's badges (lowercase set ids and titles), see `Twitch::owned_badges`. They
@@ -231,6 +349,7 @@ impl BadgeState {
             auto_tried: Mutex::new(HashMap::new()),
             earned: Mutex::new(Vec::new()),
             reward_done: Mutex::new(serde_json::from_str(&read(REWARD_DONE_KEY)).unwrap_or_default()),
+            reward_days: Mutex::new(serde_json::from_str(&read(REWARD_DAYS_KEY)).unwrap_or_default()),
             event_campaigns: RwLock::new(Vec::new()),
             owned: RwLock::new(HashSet::new()),
             event_pages: Mutex::new(HashMap::new()),
@@ -245,6 +364,77 @@ const EVENT_BADGES_URL: &str = "https://api.catquery.com/eventBadges";
 /// on other channels, get added to it.
 /// Short, as a run can last as little as an hour and a half.
 const EVENT_PAGE_TTL_SECS: f64 = 20.0 * 60.0;
+
+/// Streamdatabase's list of every Twitch global badge, the second source next to catquery: a
+/// badge either one lists is found, so one being late or down doesn't hide a badge. It has each
+/// badge's cost and current window; what to watch is on the badge's own page, as for catquery.
+const STREAMDATABASE_LIST_URL: &str = "https://www.streamdatabase.com/twitch/global-badges";
+const STREAMDATABASE_BADGE_URL: &str = "https://www.streamdatabase.com/twitch/global-badges";
+
+/// The free, time-limited badges on streamdatabase's list page (its `__NEXT_DATA__`), in
+/// catquery's shape (`id`, `name`, `imageUrl`, `startAt`, `endAt`, `free`, `streamdatabaseUrl`)
+/// so both lists are read the same way. Badges without a window are left out: whether they run
+/// can't be told.
+pub(crate) fn parse_streamdatabase_list(page: &Value) -> Vec<Value> {
+    let at = |b: &Value, date: &str, time: &str, default: &str| {
+        let date = b[date].as_str()?;
+        let time = b[time].as_str().unwrap_or(default);
+        let t = chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M").ok()?;
+        Some(t.and_utc())
+    };
+    page["props"]["pageProps"]["initialTwitchGlobalBadges"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["cost"].as_str() == Some("free") && b["removed"].as_bool() != Some(true))
+        .filter_map(|b| {
+            let current = &b["current"];
+            let set_id = current["set_id"].as_str().filter(|s| !s.is_empty())?;
+            let version = current["version"]["id"].as_str().unwrap_or("1");
+            let start = at(b, "start_at_date", "start_at_time", "00:00")?;
+            // An end date without a time runs to the end of that day.
+            let end = match b["end_at_time"].as_str() {
+                Some(_) => at(b, "end_at_date", "end_at_time", "23:59")? + chrono::Duration::seconds(59),
+                None => at(b, "end_at_date", "end_at_time", "00:00")? + chrono::Duration::days(1),
+            };
+            Some(json!({
+                "id": set_id,
+                "name": current["version"]["title"].as_str().unwrap_or(set_id),
+                "imageUrl": current["version"]["image_url_4x"].as_str().unwrap_or_default(),
+                "startAt": start.to_rfc3339(),
+                "endAt": end.to_rfc3339(),
+                "free": true,
+                "streamdatabaseUrl": format!("{STREAMDATABASE_BADGE_URL}/{set_id}/{version}"),
+            }))
+        })
+        .collect()
+}
+
+/// Catquery's badges, then streamdatabase's that catquery doesn't have, as one
+/// `{"badges": [...]}` list. The same badge is the same Twitch set id on both (catquery's `id`);
+/// the title catches one listed under another id. Catquery's entry wins, with gaps filled in
+/// from streamdatabase's.
+pub(crate) fn merge_badge_lists(catquery: &[Value], streamdatabase: &[Value]) -> Value {
+    let key = |b: &Value, k: &str| b[k].as_str().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    let mut merged: Vec<Value> = Vec::new();
+    for badge in catquery.iter().chain(streamdatabase) {
+        let (id, name) = (key(badge, "id"), key(badge, "name"));
+        let same = merged.iter_mut().find(|m| {
+            (id.is_some() && key(m, "id") == id) || (name.is_some() && key(m, "name") == name)
+        });
+        match same {
+            Some(m) => {
+                for field in ["imageUrl", "startAt", "endAt", "streamdatabaseUrl"] {
+                    if m[field].as_str().is_none_or(str::is_empty) && !badge[field].is_null() {
+                        m[field] = badge[field].clone();
+                    }
+                }
+            }
+            None => merged.push(badge.clone()),
+        }
+    }
+    json!({ "badges": merged })
+}
 
 /// The running, free event badges in a `EVENT_BADGES_URL` response: lowercase name -> image URL.
 pub(crate) fn parse_event_badges(resp: &Value, now: f64) -> HashMap<String, String> {
@@ -280,12 +470,28 @@ impl Miner {
                 image: b.image.clone(),
                 game: b.game.clone(),
                 minutes_required: b.minutes_required,
-                minutes_watched: b.minutes_watched,
+                // A badge on several days the miner counts: the day's minutes, 0 once a new day opens.
+                minutes_watched: if b.days_required > 1
+                    && !b.twitch_tracked
+                    && b.days.last_done_at > 0.0
+                    && !b.done_today(now())
+                    && b.days.minutes >= b.minutes_required as f64 + REWARD_MARGIN_MINUTES
+                {
+                    0
+                } else {
+                    b.minutes_watched
+                },
                 ends_at: b.ends_at,
                 earned: b.earned,
                 picked: picked.contains(&b.campaign_id),
                 allowed_channels: b.allowed.len(),
                 added_channels: added.values().filter(|a| a.campaign_id == b.campaign_id).count(),
+                unconfirmed: b.stopped,
+                days_required: b.days_required,
+                days_done: b.days.days_done,
+                done_today: b.done_today(now()),
+                next_day_at: if b.done_today(now()) { b.days.waiting_until(now()).unwrap_or(0.0) } else { 0.0 },
+                locked: b.locked,
             })
             .collect();
         view
@@ -319,6 +525,7 @@ impl Miner {
     pub(super) fn set_badge_campaigns(&self, campaigns: &[Campaign]) {
         let events = self.badges.events.read().unwrap().clone();
         let done = self.badges.reward_done.lock().unwrap().clone();
+        let days = self.badges.reward_days.lock().unwrap().clone();
         let owned = self.badges.owned.read().unwrap().clone();
         let running: HashSet<String> = {
             let mut badges = self.badges.badges.write().unwrap();
@@ -332,11 +539,28 @@ impl Miner {
                         b.earned = old.earned;
                         b.seen_unearned = old.seen_unearned;
                         b.reward_minutes = old.reward_minutes;
+                        b.twitch_tracked = old.twitch_tracked;
+                        b.stopped = old.stopped;
+                        b.days = old.days.clone();
+                        b.locked = old.locked;
+                        if b.twitch_tracked {
+                            b.minutes_required = old.minutes_required;
+                        }
                         if b.game.is_empty() {
                             b.game = old.game.clone();
                         }
                     }
-                    b.earned |= (b.reward && done.contains(&b.drop_id)) || b.owned_in(&owned);
+                    // Owned per Twitch: earned. Given up on before a restart: stopped, not
+                    // earned, as Twitch never confirmed it; its progress in the inventory, once
+                    // seen, takes over again.
+                    b.earned |= b.owned_in(&owned);
+                    b.stopped |= b.reward && !b.twitch_tracked && done.contains(&b.drop_id);
+                    // Days counted before a restart.
+                    if b.days == DayCount::default() {
+                        if let Some(d) = days.get(&b.drop_id) {
+                            b.days = d.clone();
+                        }
+                    }
                     b
                 })
                 .collect();
@@ -359,21 +583,42 @@ impl Miner {
     /// Loads Twitch's free event badges, used to recognise badge rewards by name. A failed load
     /// keeps the last list.
     pub(super) async fn refresh_event_badges(&self) {
-        let loaded = async {
+        let catquery = async {
             let resp = self.twitch.http().get(EVENT_BADGES_URL).send().await?.error_for_status()?;
-            Ok::<_, anyhow::Error>(resp.json::<Value>().await?)
+            let json = resp.json::<Value>().await?;
+            let badges = json["badges"].as_array().cloned().ok_or_else(|| anyhow!("no badge list: {json}"))?;
+            Ok::<_, anyhow::Error>(badges)
         };
-        match self.twitch.owned_badges().await {
+        let streamdatabase = async {
+            let resp = self.twitch.http().get(STREAMDATABASE_LIST_URL).send().await?.error_for_status()?;
+            let page = crate::entities::drops::next_data(&resp.text().await?).ok_or_else(|| anyhow!("no page data"))?;
+            Ok::<_, anyhow::Error>(parse_streamdatabase_list(&page))
+        };
+        let (owned, catquery, streamdatabase) = tokio::join!(self.twitch.owned_badges(), catquery, streamdatabase);
+        match owned {
             Ok(owned) => *self.badges.owned.write().unwrap() = owned,
             Err(e) => warn!("Could not load the badges you already have: {e:#}"),
         }
-        match loaded.await {
-            Ok(resp) => {
-                *self.badges.events.write().unwrap() = parse_event_badges(&resp, now());
-                self.load_event_campaigns(&resp).await;
+        // Either list alone is enough; with neither, the last list stays.
+        let (catquery, streamdatabase) = match (catquery, streamdatabase) {
+            (Err(a), Err(b)) => {
+                return warn!("Could not load either badge list: catquery: {a:#}; streamdatabase: {b:#}");
             }
-            Err(e) => warn!("Could not load the event badge list: {e:#}"),
-        }
+            (a, b) => {
+                let a = a.unwrap_or_else(|e| {
+                    warn!("Could not load catquery's badge list, using streamdatabase's alone: {e:#}");
+                    Vec::new()
+                });
+                let b = b.unwrap_or_else(|e| {
+                    warn!("Could not load streamdatabase's badge list, using catquery's alone: {e:#}");
+                    Vec::new()
+                });
+                (a, b)
+            }
+        };
+        let resp = merge_badge_lists(&catquery, &streamdatabase);
+        *self.badges.events.write().unwrap() = parse_event_badges(&resp, now());
+        self.load_event_campaigns(&resp).await;
     }
 
     /// Turns the running free event badges into campaigns, from their streamdatabase pages (what
@@ -427,9 +672,15 @@ impl Miner {
                     if fresh {
                         self.badges.event_pages.lock().unwrap().insert(id.to_string(), (now, page.unwrap_or_default()));
                     }
-                    // Only the run going on now counts; a later one shows once it starts.
+                    // Only the run going on now counts; a later one shows once it starts. A badge
+                    // both lists have is merged already; this keeps it once even if not.
+                    let known = campaigns
+                        .iter()
+                        .any(|k: &Campaign| k.id == c.id || k.name.trim().eq_ignore_ascii_case(c.name.trim()));
                     if c.dt_match() {
-                        campaigns.push(c);
+                        if !known {
+                            campaigns.push(c);
+                        }
                     } else if c.start_at.timestamp() as f64 > now {
                         upcoming.push(format!("{} from {}", c.name, c.start_at.format("%Y-%m-%d %H:%M UTC")));
                     }
@@ -467,19 +718,21 @@ impl Miner {
         self.badges.event_campaigns.read().unwrap().clone()
     }
 
-    /// Applies watch progress and earned badges from the drops inventory. A badge seen not earned
-    /// before that is earned now goes in the session's earned list.
+    /// Applies watch progress and earned badges: owned per Twitch, claimed in the drops inventory,
+    /// or a drop there giving a reward of the same name (Twitch's own minutes). A badge seen not
+    /// earned before that is earned now goes in the session's earned list.
     pub(super) fn update_badge_progress(&self, inventory: &Value) {
-        // Which watched channel each campaign is earned on, for the earned list.
-        // (channel id, login, game, campaign ids)
-        let watched: Vec<(String, String, String, HashSet<String>)> = self
+        // Which watched channel each badge is earned on, for the earned list.
+        let watched: Vec<WatchedChannel> = self
             .streamers()
             .iter()
             .filter_map(|s| {
                 let st = s.state();
-                let ids = st.stream.campaigns_ids.iter().cloned().collect();
-                let game = st.stream.game.as_ref().map(|g| g.display_name.clone()).unwrap_or_default();
-                (st.watching && st.badge_drop).then(|| (s.channel_id.clone(), s.username.clone(), game, ids))
+                let game = st.stream.game.as_ref();
+                let name = game.map(|g| g.display_name.clone()).unwrap_or_default();
+                let id = game.map(|g| g.id.clone());
+                (st.watching && st.badge_drop)
+                    .then(|| (s.channel_id.clone(), s.username.clone(), name, id, st.stream.campaigns_ids.clone()))
             })
             .collect();
         let mut newly = Vec::new();
@@ -499,6 +752,8 @@ impl Miner {
             .collect();
         let in_progress = inventory["dropCampaignsInProgress"].as_array();
         let owned = self.badges.owned.read().unwrap().clone();
+        // A given up badge Twitch shows unfinished: saved, so a restart doesn't give up on it again.
+        let mut revived = false;
         for b in self.badges.badges.write().unwrap().iter_mut() {
             let (campaign_id, drop_id) = (b.campaign_id.as_str(), b.drop_id.as_str());
             let progress = in_progress
@@ -509,17 +764,43 @@ impl Miner {
                 .find(|d| d["id"].as_str() == Some(drop_id))
                 .map(|d| &d["self"]);
             let mut done = earned.contains(b.benefit_id.as_str())
-                || (b.campaign_id.starts_with("event:") && earned_names.contains(&b.name.trim().to_lowercase()))
+                || (b.reward && earned_names.contains(&b.name.trim().to_lowercase()))
                 || b.owned_in(&owned);
             if let Some(p) = progress {
                 b.minutes_watched = p["currentMinutesWatched"].as_i64().unwrap_or(b.minutes_watched);
                 done |= p["isClaimed"].as_bool() == Some(true);
             }
+            // An event or reward badge a Twitch drop gives: Twitch's minutes and claim count,
+            // also for one the miner had given up on.
+            if b.reward {
+                if let Some(TwitchProgress { minutes, required, claimed, locked }) = inventory_progress(inventory, &b.name) {
+                    if !b.twitch_tracked {
+                        info!("Using Twitch's progress for the {} badge: {minutes}/{required} min", b.name);
+                    }
+                    if locked && !b.locked {
+                        info!("The {} badge isn't unlocked on Twitch yet; watching for it once it is", b.name);
+                    }
+                    b.twitch_tracked = true;
+                    b.locked = locked && !claimed;
+                    b.minutes_watched = minutes;
+                    if required > 0 {
+                        b.minutes_required = required;
+                    }
+                    if b.stopped && !claimed {
+                        revived = true;
+                        info!("Watching for the {} badge again: Twitch shows it unfinished", b.name);
+                    }
+                    b.stopped &= claimed;
+                    done |= claimed;
+                }
+            }
             if done && !b.earned && b.seen_unearned {
-                let channel = watched.iter().find(|(_, _, _, ids)| ids.contains(campaign_id));
+                let channel = watched
+                    .iter()
+                    .find(|(id, _, _, game, ids)| b.earnable_on(id, game.as_deref(), ids));
                 // The stream's game where the campaign didn't name one.
                 let game = match (b.game.is_empty(), channel) {
-                    (true, Some((_, _, game, _))) => game.clone(),
+                    (true, Some((_, _, game, _, _))) => game.clone(),
                     _ => b.game.clone(),
                 };
                 newly.push(EarnedBadge {
@@ -529,8 +810,8 @@ impl Miner {
                     game,
                     minutes_required: b.minutes_required,
                     earned_at: now(),
-                    channel_id: channel.map(|(id, _, _, _)| id.clone()),
-                    channel: channel.map(|(_, login, _, _)| login.clone()),
+                    channel_id: channel.map(|(id, _, _, _, _)| id.clone()),
+                    channel: channel.map(|(_, login, _, _, _)| login.clone()),
                 });
             }
             b.earned |= done;
@@ -543,6 +824,9 @@ impl Miner {
             }
         }
         self.badges.earned.lock().unwrap().extend(newly);
+        if revived {
+            self.save_reward_done();
+        }
     }
 
     /// Marks the live channels that can earn a picked badge right now, for the BADGES rule.
@@ -554,7 +838,7 @@ impl Miner {
                 .read()
                 .unwrap()
                 .iter()
-                .filter(|b| !b.earned && picked.contains(&b.campaign_id))
+                .filter(|b| b.wanted(now()) && picked.contains(&b.campaign_id))
                 .cloned()
                 .collect()
         };
@@ -569,8 +853,11 @@ impl Miner {
         }
     }
 
-    /// Counts minutes watched on a channel toward the picked reward badges it can earn, which
-    /// Twitch reports no progress for. One watched past its goal (plus a margin) counts as earned.
+    /// Counts minutes watched on a channel toward the picked reward badges it can earn that
+    /// Twitch reports no progress for. That count is never proof: Twitch may count less (it
+    /// counts drop progress on one stream at a time). So a badge is only earned once Twitch says
+    /// so (`update_badge_progress`); one watched to twice its goal plus a margin without that is
+    /// given up on, not earned, until it's picked again or channels are added for it.
     pub(super) fn count_reward_minutes(&self, s: &Streamer, minutes: f64) {
         if minutes <= 0.0 {
             return;
@@ -583,57 +870,128 @@ impl Miner {
             (st.stream.game.as_ref().map(|g| g.id.clone()), st.stream.campaigns_ids.clone())
         };
         let picked = self.badges.picked.read().unwrap().clone();
-        let mut newly = Vec::new();
+        let now = now();
+        let mut stopped = Vec::new();
+        let mut days_in = Vec::new();
+        let mut days_changed = false;
         for b in self.badges.badges.write().unwrap().iter_mut() {
-            if !b.reward || b.earned || !picked.contains(&b.campaign_id) {
+            if !b.reward || b.twitch_tracked || !b.wanted(now) || !picked.contains(&b.campaign_id) {
                 continue;
             }
             if !b.earnable_on(&s.channel_id, game.as_deref(), &campaign_ids) {
                 continue;
             }
+            if b.days_required > 1 {
+                // Each day's minutes on their own: a day that opened after the last one was in
+                // starts from 0.
+                if b.days.last_done_at > 0.0 && b.days.minutes >= b.minutes_required as f64 + REWARD_MARGIN_MINUTES {
+                    b.days.minutes = 0.0;
+                }
+                let before = b.days.minutes.floor();
+                b.days.minutes += minutes;
+                days_changed |= b.days.minutes.floor() > before;
+                b.minutes_watched = (b.days.minutes.floor() as i64).min(b.minutes_required);
+                if b.days.minutes >= b.minutes_required as f64 + REWARD_MARGIN_MINUTES {
+                    b.days.days_done += 1;
+                    b.days.last_done_at = now;
+                    days_changed = true;
+                    // A day past the days asked for without Twitch confirming it: given up on.
+                    if b.days.days_done > b.days_required {
+                        b.stopped = true;
+                        stopped.push((b.name.clone(), b.days.days_done * b.minutes_required));
+                    } else {
+                        days_in.push((b.name.clone(), b.days.days_done, b.days_required));
+                    }
+                }
+                continue;
+            }
             b.reward_minutes += minutes;
             b.minutes_watched = (b.reward_minutes.floor() as i64).min(b.minutes_required);
-            if b.reward_minutes >= b.minutes_required as f64 + REWARD_MARGIN_MINUTES {
-                b.earned = true;
-                newly.push(EarnedBadge {
-                    campaign_id: b.campaign_id.clone(),
-                    name: b.name.clone(),
-                    image: b.image.clone(),
-                    game: b.game.clone(),
-                    minutes_required: b.minutes_required,
-                    earned_at: now(),
-                    channel_id: Some(s.channel_id.clone()),
-                    channel: Some(s.username.clone()),
-                });
+            if b.reward_minutes >= 2.0 * b.minutes_required as f64 + REWARD_MARGIN_MINUTES {
+                b.stopped = true;
+                stopped.push((b.name.clone(), b.reward_minutes.round() as i64));
             }
         }
-        if newly.is_empty() {
+        if days_changed {
+            self.save_reward_days();
+        }
+        for (name, done, days) in &days_in {
+            self.event(format!(
+                "Watched the day's minutes for the {name} badge (day {done} of {days}); watching for it again in 24 hours"
+            ));
+        }
+        if !days_in.is_empty() && stopped.is_empty() {
+            self.update_badge_targets();
+        }
+        if stopped.is_empty() {
             return;
         }
+        self.save_reward_done();
+        for (name, watched) in &stopped {
+            self.event(format!(
+                "Watched {watched} minutes for the {name} badge, but Twitch hasn't confirmed it: stopped watching \
+                 for it. Pick it again or add channels to try once more"
+            ));
+        }
+        self.update_badge_targets();
+    }
+
+    /// Saves the day counts of badges on several days, see `REWARD_DAYS_KEY`.
+    fn save_reward_days(&self) {
+        let json = {
+            let badges = self.badges.badges.read().unwrap();
+            let mut days = self.badges.reward_days.lock().unwrap();
+            *days = badges
+                .iter()
+                .filter(|b| b.days != DayCount::default())
+                .map(|b| (b.drop_id.clone(), b.days.clone()))
+                .collect();
+            serde_json::to_string(&*days).unwrap_or_default()
+        };
+        if let Err(e) = self.store.set_meta(REWARD_DAYS_KEY, &json) {
+            warn!("Could not save the badge day counts: {e:#}");
+        }
+    }
+
+    /// Saves which reward badges were given up on, see `REWARD_DONE_KEY`.
+    fn save_reward_done(&self) {
         let json = {
             let badges = self.badges.badges.read().unwrap();
             let mut done = self.badges.reward_done.lock().unwrap();
-            // Ended ones aren't needed anymore.
-            done.retain(|id| badges.iter().any(|b| b.drop_id == *id));
-            done.extend(badges.iter().filter(|b| b.reward && b.earned).map(|b| b.drop_id.clone()));
+            *done = badges.iter().filter(|b| b.reward && b.stopped).map(|b| b.drop_id.clone()).collect();
             serde_json::to_string(&*done).unwrap_or_default()
         };
         if let Err(e) = self.store.set_meta(REWARD_DONE_KEY, &json) {
-            warn!("Could not save the watched reward badges: {e:#}");
+            warn!("Could not save the given up reward badges: {e:#}");
         }
-        for e in &newly {
-            self.event(format!(
-                "Watched {} minutes on {} for the {} badge; Twitch gives it from its own count",
-                e.minutes_required, s.username, e.name
-            ));
+    }
+
+    /// Gives a badge that was given up on another go: its own count starts over.
+    fn retry_badge(&self, campaign_id: &str) {
+        let retried = {
+            let mut badges = self.badges.badges.write().unwrap();
+            let mut retried = false;
+            for b in badges.iter_mut().filter(|b| b.campaign_id == campaign_id && b.stopped) {
+                b.stopped = false;
+                b.reward_minutes = 0.0;
+                b.minutes_watched = 0;
+                b.days = DayCount::default();
+                retried = true;
+            }
+            retried
+        };
+        if retried {
+            self.save_reward_done();
+            self.save_reward_days();
         }
-        self.badges.earned.lock().unwrap().extend(newly);
-        self.update_badge_targets();
     }
 
     /// Picks or unpicks a badge. Picking one turns the BADGES rule on if it was off; unpicking one
     /// removes the channels quick-added for it.
     pub fn set_badge_picked(&self, campaign_id: &str, picked: bool) -> Result<()> {
+        if picked {
+            self.retry_badge(campaign_id);
+        }
         let badge = self.find_badge(campaign_id)?;
         let saved = {
             let mut set = self.badges.picked.write().unwrap();
@@ -715,7 +1073,7 @@ impl Miner {
         let now = now();
         let open: Vec<Badge> = {
             let badges = self.badges.badges.read().unwrap();
-            badges.iter().filter(|b| !b.earned).cloned().collect()
+            badges.iter().filter(|b| b.wanted(now)).cloned().collect()
         };
         let needs_channels: Vec<(String, String)> = {
             // Campaigns some live channel in the list can earn right now, like `update_badge_targets`.
@@ -741,8 +1099,11 @@ impl Miner {
             }
             let tried = self.badges.auto_tried.lock().unwrap();
             let badges = self.badges.badges.read().unwrap();
+            // Locked ones, and ones whose minutes for today are in, need no channels now.
+            let wanted: HashSet<String> = open.iter().map(|b| b.campaign_id.clone()).collect();
             open_campaigns(&badges)
                 .into_iter()
+                .filter(|id| wanted.contains(id))
                 .filter(|id| !covered.contains(id))
                 .filter(|id| added.get(id).copied().unwrap_or(0) < 2 * QUICK_ADD)
                 .filter(|id| tried.get(id).map_or(true, |t| now - t > AUTO_ADD_RETRY_SECS))
@@ -772,6 +1133,8 @@ impl Miner {
         if badge.earned {
             bail!("The {} badge is already earned", badge.name);
         }
+        // Adding channels for one that was given up on gives it another go.
+        self.retry_badge(campaign_id);
         // Live streams of the game: from the directory, or the campaign's own channel list.
         let streaming: Vec<(String, String, i64)> = if badge.allowed.is_empty() {
             if badge.game_slug.is_empty() {
@@ -929,6 +1292,9 @@ impl Miner {
 }
 
 #[cfg(test)]
+mod scenarios;
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
@@ -1008,5 +1374,25 @@ mod tests {
         let named = event(json!([{ "user": { "id": "42", "login": "samham" } }]));
         assert!(named.earnable_on("42", Some("21779"), &[]));
         assert!(!named.earnable_on("ch", Some("21779"), &[]));
+    }
+}
+
+#[cfg(test)]
+mod given_up_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn given_up_badges_are_done_but_not_earned() {
+        let badge = json!({ "id": "kda-fan", "name": "K/DA Fan", "startAt": "2020-01-01T00:00:00Z", "endAt": "2099-01-01T00:00:00Z" });
+        let page = json!({ "props": { "pageProps": { "availabilities": [{
+            "objectives": [[{ "type": "twitch_watch", "minutes": 30, "days": null }]], "categories": [], "channels": null
+        }] } } });
+        let mut b = Badge::from_campaign(&Campaign::from_event_badge(&badge, &page).unwrap(), &HashMap::new()).remove(0);
+        assert!(!b.done());
+        b.stopped = true;
+        assert!(b.done() && !b.earned);
+        assert!(open_campaigns(&[b]).is_empty());
     }
 }

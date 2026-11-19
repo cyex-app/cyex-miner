@@ -95,6 +95,12 @@ impl Stream {
         self.minute_watched_timestamp = 0.0;
     }
 
+    /// Stops counting time while the stream has no watch slot, so getting one back doesn't
+    /// count the gap.
+    pub fn pause_minute_watched(&mut self) {
+        self.minute_watched_timestamp = 0.0;
+    }
+
     /// Counts the time since the last watch; returns the minutes added.
     pub fn update_minute_watched(&mut self) -> f64 {
         let now = now();

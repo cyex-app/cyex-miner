@@ -47,7 +47,10 @@ impl Priority {
             }),
             Self::PointsAscending => ranked.sort_by_key(|s| s.state().channel_points),
             Self::PointsDescending => ranked.sort_by_key(|s| Reverse(s.state().channel_points)),
-            Self::Badges | Self::Prioritized | Self::Streak | Self::Drops | Self::Order => {}
+            // Streams already partly watched first: finishing a streak beats starting another
+            // and risking both ending before either is in.
+            Self::Streak => ranked.sort_by_key(|s| s.stream_minutes() == 0.0),
+            Self::Badges | Self::Prioritized | Self::Drops | Self::Order => {}
         }
         ranked
     }
@@ -79,6 +82,59 @@ pub fn select_watching(candidates: &[Arc<Streamer>], rules: &[Priority]) -> Vec<
         }
     }
     selected
+}
+
+/// What the watch loop watches in one pass.
+pub struct WatchPlan {
+    pub watching: Vec<Arc<Streamer>>,
+    /// The channel watched alone for a picked badge, kept through a streak break.
+    pub badge_channel: Option<Arc<Streamer>>,
+    /// `watching` is a break for pending watch streaks, with the badge waiting.
+    pub streak_break: bool,
+}
+
+/// The channels to watch this pass. `focus` is the badge channel of the last pass.
+///
+/// Twitch counts badge progress on one stream at a time; switching between two every few
+/// seconds keeps restarting it. So while a picked badge can be earned, only its channel is
+/// watched (like TwitchDropsMiner), whatever the other rules say, and the second slot waits until
+/// it's earned. The channel already focused stays, so progress isn't split. Without `BADGES` in
+/// the rules, this is off.
+///
+/// A watch streak is lost with its stream while a badge can wait, so a pending streak (with
+/// `STREAK` in the rules) gets a short break of its own: both slots on streaks until Twitch
+/// confirms them or they give up, then the badge channel alone again. Only channels with a
+/// streak to lose get one (Twitch's count above 0): with many channels live, breaks for every
+/// stream would hold a badge up for hours. The badge channel's own streak needs no break: it's
+/// earned while the badge is.
+pub fn plan_watching(candidates: &[Arc<Streamer>], rules: &[Priority], focus: Option<&str>) -> WatchPlan {
+    let badge_channel = rules
+        .contains(&Priority::Badges)
+        .then(|| {
+            let eligible = || candidates.iter().filter(|s| s.state().badge_drop);
+            eligible()
+                .find(|s| focus == Some(s.channel_id.as_str()))
+                .or_else(|| eligible().next())
+                .cloned()
+        })
+        .flatten();
+    let streaks = match &badge_channel {
+        Some(b) if rules.contains(&Priority::Streak) && !b.streak_missing() => {
+            let at_stake: Vec<Arc<Streamer>> = candidates
+                .iter()
+                .filter(|s| s.state().watch_streak.is_some_and(|n| n > 0))
+                .cloned()
+                .collect();
+            select_watching(&at_stake, &[Priority::Streak])
+        }
+        _ => Vec::new(),
+    };
+    let watching = match &badge_channel {
+        Some(_) if !streaks.is_empty() => streaks.clone(),
+        Some(s) => vec![s.clone()],
+        None => select_watching(candidates, rules),
+    };
+    WatchPlan { streak_break: badge_channel.is_some() && !streaks.is_empty(), watching, badge_channel }
 }
 
 /// Drops repeated rules, keeping the first of each.

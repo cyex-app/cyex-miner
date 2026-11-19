@@ -54,18 +54,30 @@ the web UI:
 - **Remove** a channel. It's also blacklisted so it doesn't come back from your follow list; adding it again
   un-blacklists it.
 - **Badge drops** lists the free Twitch badges for watch time alone that are running now, from
-  [catquery's event badge list](https://api.catquery.com/eventBadges). Where to watch (a category, or the
+  [catquery's event badge list](https://api.catquery.com/eventBadges) and
+  [streamdatabase's global badge list](https://www.streamdatabase.com/twitch/global-badges), both read every 10
+  minutes. A badge either one lists is found, and one both list is shown once (matched by Twitch set id, or by
+  name); with one list down, the other still works. Where to watch (a category, or the
   channels named) and for how long come from each badge's streamdatabase page, read again every 20 minutes;
-  a badge that runs several times uses the run going on now. Badges that need a subscription, purchase or
-  watching on several days aren't shown, nor are badges your account already has (read from Twitch with the
-  event list, by set id or name). Tick a badge to give its eligible live channels a watch slot
+  a badge that runs several times uses the run going on now. Badges that need a subscription or purchase
+  aren't shown, nor are badges your account already has (read from Twitch with the event list, by set id or
+  name). Badges for watching on several days (up to 14, like GTA VI's chains: 60 minutes on 2 to 6 days) are:
+  where Twitch tracks one as a drop, its progress and lock are Twitch's (a drop for a later day waits until
+  Twitch unlocks it); otherwise the miner counts each day, and the next one opens 24 hours (and 5 minutes)
+  after the last was in, as Twitch's daily reset does. Tick a badge to give its eligible live channels a watch slot
   through the `BADGES` rule (it's turned on if it was off); **All** picks every badge not earned yet. **Auto select
   badges** does all of it hands-off: every badge is picked as it starts, and when no channel in your list can
   earn one, live eligible channels are added for it (at most 10 per badge at a time; a try that finds none is
   retried after 30 minutes). Added channels that go offline for 10 minutes or switch game are removed, so new ones
   can take their place. Twitch counts progress on one stream at a time, so while a picked badge can be earned
-  only its channel is watched, whatever the other rules say: watch streaks and the second slot wait until the
-  badge is earned or no badge channel is live (taking `BADGES` out of the rules turns this off). **Add channels** adds up to 5 eligible channels
+  only its channel is watched, whatever the other rules say: the second slot waits until the badge is earned or
+  no badge channel is live (taking `BADGES` out of the rules turns this off). A pending watch streak on a channel
+  with a streak to lose (with `STREAK`
+  in the rules) gets a short break instead: both slots go to streaks until Twitch confirms them, then the badge
+  channel is watched alone again. A badge counts as earned only on Twitch's word: your account owns it, or the
+  drops inventory shows it claimed. Where a drop in the inventory gives a reward of the badge's name, its progress
+  is Twitch's; otherwise the miner counts the minutes itself and, past twice the goal without Twitch confirming it,
+  stops and shows it as not confirmed (picking it again or **Add** retries it). **Add channels** adds up to 5 eligible channels
   that are live, most viewers first; they're removed again once every badge of the campaign is earned, the campaign
   ends or you untick it. Channels you added yourself are never removed this way.
   A campaign with several badges (e.g. for 30, 60 and 90 minutes) shows its next one, and a pick or added channel
@@ -124,7 +136,10 @@ docker run -d --name points-miner-rust --restart unless-stopped -p 5000:5000 -v 
   left and no bonuses, drops, moments or raids are claimed; the pause is saved in the database and survives restarts
 - Claims bonus chests and moments, joins raids, keeps watch streaks. `STREAK` keeps a stream's slot until Twitch
   confirms the streak: the bonus arrives or the channel's streak count goes up (checked once a minute while it's
-  watched). Channels without a streak yet fall back to about 7 minutes. Offline channels with a streak are also
+  watched). Channels without a streak yet fall back to about 7 minutes, and a stream whose count hasn't gone up
+  after 30 minutes watched gives its slot to other streaks. Streams already partly watched go first. A stream back
+  within 30 minutes of going offline counts as the same one, so it still needs the streak if that one hadn't
+  earned it. Time only counts while a stream has a slot. Offline channels with a streak are also
   checked for going live every 3 minutes (one batched request), in case the live notice from Twitch was missed, and a
   new broadcast counts as a new stream even when going offline in between was missed
 - Drop campaigns: tracks progress and claims drops automatically (`claim_drops_startup` claims the inventory on start)

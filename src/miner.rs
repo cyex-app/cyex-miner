@@ -38,6 +38,8 @@ pub use predictions::{PredictionSettings, PredictionsView};
 pub(crate) use predictions::{pick as pick_outcome, Outcome, Strategy};
 #[cfg(test)]
 pub(crate) use badges::parse_event_badges;
+#[cfg(test)]
+pub(crate) use badges::{inventory_progress, merge_badge_lists, parse_streamdatabase_list, TwitchProgress};
 
 /// `meta` key for the watch priority saved in the web UI, which overrides config.toml.
 const PRIORITY_KEY: &str = "priority";
@@ -770,6 +772,8 @@ impl Miner {
             if st.is_online {
                 st.offline_at = now();
                 st.is_online = false;
+                // A stream back within 30 minutes is the same one for its watch streak.
+                st.prev_streak_missing = st.stream.watch_streak_missing;
             }
             st.watching = false;
             st.checked = true;
@@ -902,6 +906,8 @@ impl Miner {
     async fn watch_loop(self: Arc<Self>) {
         // The channel watched alone for a picked badge, see below.
         let mut focus: Option<String> = None;
+        // What's being watched for the log: the badge channel, a streak break, or neither.
+        let mut mode: Option<String> = None;
         loop {
             if self.paused() {
                 // Pausing mid-pass can leave flags set below; nothing is watched while paused.
@@ -935,38 +941,35 @@ impl Miner {
             if self.fill_slots() && !rules.contains(&Priority::Order) {
                 rules.push(Priority::Order);
             }
-            // Twitch counts badge progress on one stream at a time; switching between two every few
-            // seconds keeps restarting it. So while a picked badge can be earned, only its channel
-            // is watched (like TwitchDropsMiner), whatever the other rules say: watch streaks and
-            // the second slot wait until it's earned. The channel already focused stays, so
-            // progress isn't split. Taking BADGES out of the rules turns this off.
-            let badge_channel = rules
-                .contains(&Priority::Badges)
-                .then(|| {
-                    let eligible = || candidates.iter().filter(|s| s.state().badge_drop);
-                    eligible()
-                        .find(|s| focus.as_deref() == Some(s.channel_id.as_str()))
-                        .or_else(|| eligible().next())
-                        .cloned()
-                })
-                .flatten();
-            let focus_now = badge_channel.as_ref().map(|s| s.channel_id.clone());
-            if focus_now != focus {
-                match &badge_channel {
-                    Some(s) => self.event(format!(
-                        "Watching only {s} for a picked badge; watch streaks and the second slot wait until it's earned"
+            let plan = priority::plan_watching(&candidates, &rules, focus.as_deref());
+            focus = plan.badge_channel.as_ref().map(|s| s.channel_id.clone());
+            let mode_now = match (&plan.badge_channel, plan.streak_break) {
+                (Some(_), true) => Some(format!("streaks:{}", names(&plan.watching))),
+                (Some(s), false) => Some(s.channel_id.clone()),
+                (None, _) => None,
+            };
+            if mode_now != mode {
+                match &plan.badge_channel {
+                    Some(_) if plan.streak_break => self.event(format!(
+                        "Pausing the badge for watch streaks on {}; back to it once Twitch confirms them",
+                        names(&plan.watching)
                     )),
-                    None if focus.is_some() => self.event("Back to watching 2 channels"),
+                    Some(s) => self.event(format!(
+                        "Watching only {s} for a picked badge; the second slot waits until it's earned"
+                    )),
+                    None if mode.is_some() => self.event("Back to watching 2 channels"),
                     None => {}
                 }
-                focus = focus_now;
+                mode = mode_now;
             }
-            let watching = match badge_channel {
-                Some(s) => vec![s],
-                None => priority::select_watching(&candidates, &rules),
-            };
+            let watching = plan.watching;
             for s in &streamers {
-                s.state().watching = watching.iter().any(|w| Arc::ptr_eq(w, s));
+                let watched = watching.iter().any(|w| Arc::ptr_eq(w, s));
+                let mut st = s.state();
+                st.watching = watched;
+                if !watched {
+                    st.stream.pause_minute_watched();
+                }
             }
             if watching.is_empty() {
                 // Nothing live: look again soon, so a channel that goes live is picked up quickly.
@@ -1144,6 +1147,11 @@ fn normalize_login(name: &str) -> Result<String> {
         bail!("'{name}' is not a valid Twitch username");
     }
     Ok(name)
+}
+
+/// Channel names for the log, "a and b".
+fn names(streamers: &[Arc<Streamer>]) -> String {
+    streamers.iter().map(|s| s.username.as_str()).collect::<Vec<_>>().join(" and ")
 }
 
 /// Whether to look up drop campaigns for a live stream.

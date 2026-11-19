@@ -1865,7 +1865,16 @@ function badgeHtml(b) {
   const pct = b.minutes_required ? Math.min(100, Math.round(b.minutes_watched / b.minutes_required * 100)) : 0;
   const where = b.allowed_channels ? `${fmt(b.allowed_channels)} channels` : "any channel";
   const meta = ["ends " + fmtDate(new Date(b.ends_at * 1000)).slice(0, 10), b.game, where].filter(Boolean).join(" · ");
-  const added = b.added_channels ? ` · ${fmt(b.added_channels)} added` : "";
+  // Watched well past its goal without Twitch confirming it; Add (or picking it again) retries it.
+  // A badge on several days shows its day, and waits 24 hours after each one (Twitch's reset).
+  const days = b.days_required > 1;
+  const nextIn = b.next_day_at ? Math.max(1, Math.round((b.next_day_at * 1000 - Date.now()) / 3600000)) : 0;
+  const state = b.unconfirmed ? " · not confirmed, stopped"
+    : b.locked ? " · not unlocked on Twitch yet"
+    : b.done_today ? ` · next day in ${fmt(nextIn)}h`
+    : "";
+  const day = !days ? "" : b.days_done ? ` · day ${fmt(Math.min(b.days_done + 1, b.days_required))} of ${fmt(b.days_required)}` : ` · on ${fmt(b.days_required)} days`;
+  const added = (b.added_channels ? ` · ${fmt(b.added_channels)} added` : "") + day + state;
   const watched = Math.min(b.minutes_watched, b.minutes_required);
   // Badge art comes from Twitch's CDN; anything that isn't https gets the plain icon.
   const image = /^https:\/\//.test(b.image) ? b.image : "";
@@ -1878,7 +1887,7 @@ function badgeHtml(b) {
         <span class="rule-name" title="${esc(b.name)}">${esc(b.name)}</span>
         <span class="rule-desc" title="${esc(meta)}">${esc(meta)}</span>
         <span class="progress"><span class="track"><span class="fill" style="width:${pct}%"></span></span>
-          <span class="mono">${fmt(watched)}/${fmt(b.minutes_required)} min${added}</span></span>
+          <span class="mono">${fmt(watched)}/${fmt(b.minutes_required)} min${days ? " a day" : ""}${added}</span></span>
       </span>
     </label>
     <button type="button" class="btn secondary small add-ch" data-tip="Add channels" aria-label="Add channels for ${esc(b.name)}"

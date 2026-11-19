@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 use super::stream::Stream;
 use crate::utils::{millify, now};
 
+/// Minutes a stream is watched for its watch streak while Twitch's count hasn't gone up, before
+/// it gives its slot to other streaks. Twitch gives a streak within minutes of watching.
+pub const STREAK_GIVE_UP_MINUTES: f64 = 30.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ChatPresence {
@@ -82,6 +86,9 @@ pub struct StreamerState {
     pub badge_drop: bool,
     /// Minutes watched since the miner started, over every stream; `stream.minute_watched` is the current one.
     pub session_minutes: f64,
+    /// Whether the stream before the last offline still needed its watch streak. A stream
+    /// back within 30 minutes counts as the same one, so it still needs it then.
+    pub prev_streak_missing: bool,
 }
 
 impl StreamerState {
@@ -160,12 +167,26 @@ impl Streamer {
     /// claimed and the stream started more than 30 minutes after the previous one ended. Where
     /// Twitch reports a streak count, that holds until the bonus arrives or the count goes up;
     /// without one (no streak yet), until ~7 minutes were watched, when Twitch usually gives it.
+    ///
+    /// A stream back within 30 minutes of going offline counts as the same one: it still needs
+    /// the streak if that one hadn't earned it yet. And a stream whose count hasn't gone up after
+    /// `STREAK_GIVE_UP_MINUTES` watched isn't earning one (Twitch gives it within minutes), so it
+    /// stops holding a slot other streaks need.
     pub fn streak_missing(&self) -> bool {
         let st = self.state();
+        let new_stream = st.offline_at == 0.0 || (now() - st.offline_at) / 60.0 > 30.0;
         self.settings.watch_streak
             && st.stream.watch_streak_missing
-            && (st.offline_at == 0.0 || (now() - st.offline_at) / 60.0 > 30.0)
-            && (st.stream.streak_at_start.is_some() || st.stream.minute_watched < 7.0)
+            && (new_stream || st.prev_streak_missing)
+            && match st.stream.streak_at_start {
+                Some(_) => st.stream.minute_watched < STREAK_GIVE_UP_MINUTES,
+                None => st.stream.minute_watched < 7.0,
+            }
+    }
+
+    /// Minutes of this stream watched so far, for finishing started streaks first.
+    pub fn stream_minutes(&self) -> f64 {
+        self.state().stream.minute_watched
     }
 }
 

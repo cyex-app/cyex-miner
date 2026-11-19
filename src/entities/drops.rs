@@ -30,6 +30,9 @@ pub struct Drop {
     /// Subscriptions needed instead of (or on top of) watching.
     pub required_subs: i64,
     pub minutes_required: i64,
+    /// Days to watch `minutes_required` on (each day), for badges like GTA VI's chains (60 minutes on
+    /// 2 days for Bronze Chain); 1 for everything else.
+    pub days_required: i64,
     pub has_preconditions_met: Option<bool>,
     pub current_minutes_watched: i64,
     pub drop_instance_id: Option<String>,
@@ -73,6 +76,7 @@ impl Drop {
             rewards: edges.iter().map(|e| reward(&e["benefit"])).collect(),
             required_subs: v["requiredSubs"].as_i64().unwrap_or(0),
             minutes_required: v["requiredMinutesWatched"].as_i64().unwrap_or(0),
+            days_required: 1,
             has_preconditions_met: None,
             current_minutes_watched: 0,
             drop_instance_id: None,
@@ -176,28 +180,42 @@ pub(crate) fn game_slug(name: &str) -> String {
     slug.trim_end_matches('-').to_string()
 }
 
-/// The minutes to watch in one go for a streamdatabase availability's `objectives`, a list of
-/// alternatives that each list steps. Only alternatives made of watching alone count (no
-/// subscriptions, cheers or watching on several days); the quickest one wins.
-fn watch_minutes(objectives: &Value) -> Option<i64> {
+/// One way of earning a badge: (availability, (minutes a day, days), start, end).
+type Way<'a> = (&'a Value, (i64, i64), DateTime<Utc>, DateTime<Utc>);
+
+/// The most days a badge asks to watch on that the miner works on; past that it's left out.
+pub const MAX_WATCH_DAYS: i64 = 14;
+
+/// The days a watch step asks for: `days` (null or 0 means one).
+fn step_days(step: &Value) -> i64 {
+    step["days"].as_i64().unwrap_or(1).max(1)
+}
+
+/// The watch goal of a streamdatabase availability's `objectives`, a list of alternatives that
+/// each list steps: (minutes a day, days), e.g. (60, 2) for "watch 60 minutes on 2 days". Only
+/// alternatives made of watching alone count (no subscriptions or cheers); the quickest one wins,
+/// fewest days first.
+fn watch_minutes(objectives: &Value) -> Option<(i64, i64)> {
     objectives
         .as_array()?
         .iter()
         .filter_map(|steps| {
             let steps = steps.as_array().filter(|s| !s.is_empty())?;
-            let minutes: Option<Vec<i64>> = steps
+            let goals: Option<Vec<(i64, i64)>> = steps
                 .iter()
                 .map(|s| {
-                    let days = s["days"].as_i64().unwrap_or(0);
-                    (s["type"].as_str() == Some("twitch_watch") && days <= 1)
+                    let days = step_days(s);
+                    (s["type"].as_str() == Some("twitch_watch") && days <= MAX_WATCH_DAYS)
                         .then(|| s["minutes"].as_i64())
                         .flatten()
                         .filter(|m| *m > 0)
+                        .map(|m| (m, days))
                 })
                 .collect();
-            minutes?.into_iter().max()
+            let goals = goals?;
+            Some((goals.iter().map(|g| g.0).max()?, goals.iter().map(|g| g.1).max()?))
         })
-        .min()
+        .min_by_key(|&(minutes, days)| (days, minutes))
 }
 
 /// Whether `objectives` has a way of earning by watching alone whose minutes aren't filled in
@@ -206,7 +224,7 @@ fn watch_minutes_unknown(objectives: &Value) -> bool {
     objectives.as_array().into_iter().flatten().any(|steps| {
         steps.as_array().is_some_and(|steps| {
             !steps.is_empty()
-                && steps.iter().all(|s| s["type"].as_str() == Some("twitch_watch") && s["days"].as_i64().unwrap_or(0) <= 1)
+                && steps.iter().all(|s| s["type"].as_str() == Some("twitch_watch") && step_days(s) <= MAX_WATCH_DAYS)
                 && steps.iter().any(|s| s["minutes"].is_null())
         })
     })
@@ -252,10 +270,13 @@ impl Campaign {
         let start_at = parse_dt(&badge["startAt"])?;
         let end_at = parse_dt(&badge["endAt"])?;
         let availabilities = page["props"]["pageProps"]["availabilities"].as_array()?;
-        let known = availabilities.iter().filter_map(|a| watch_minutes(&a["objectives"])).min();
+        let known = availabilities
+            .iter()
+            .filter_map(|a| watch_minutes(&a["objectives"]))
+            .min_by_key(|&(minutes, days)| (days, minutes));
         // (availability, minutes, start, end); the page's own window is the exact one (Jordan x
         // Space Jam ran 20:25-21:59 UTC while catquery said until two days later).
-        let ways: Vec<(&Value, i64, DateTime<Utc>, DateTime<Utc>)> = availabilities
+        let ways: Vec<Way> = availabilities
             .iter()
             .filter_map(|a| {
                 let minutes = watch_minutes(&a["objectives"])
@@ -266,7 +287,7 @@ impl Campaign {
             .collect();
         let running = ways.iter().find(|(_, _, s, e)| *s <= now && now < *e);
         let next = ways.iter().filter(|(_, _, s, _)| *s > now).min_by_key(|(_, _, s, _)| *s);
-        let &(availability, minutes, start_at, end_at) = running.or(next).or(ways.first())?;
+        let &(availability, (minutes, days), start_at, end_at) = running.or(next).or(ways.first())?;
         let game = &availability["categories"][0]["game"];
         let game_name = game["name"].as_str().unwrap_or_default().to_string();
         let image = badge["imageUrl"].as_str().unwrap_or_default().to_string();
@@ -279,6 +300,7 @@ impl Campaign {
             rewards: vec![reward],
             required_subs: 0,
             minutes_required: minutes,
+            days_required: days,
             has_preconditions_met: None,
             current_minutes_watched: 0,
             drop_instance_id: None,

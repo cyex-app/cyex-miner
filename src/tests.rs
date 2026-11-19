@@ -6,10 +6,10 @@ use crate::{
     config::{Config, EXAMPLE_CONFIG},
     entities::{
         drops::{game_slug, next_data, Campaign},
-        streamer::{ChatPresence, Source, Streamer, StreamerSettings},
+        streamer::{ChatPresence, Source, Streamer, StreamerSettings, STREAK_GIVE_UP_MINUTES},
     },
-    miner::{parse_event_badges, pick_outcome, Outcome, PredictionSettings, Strategy},
-    priority::{select_watching, Priority},
+    miner::{inventory_progress, merge_badge_lists, TwitchProgress, parse_event_badges, parse_streamdatabase_list, pick_outcome, Outcome, PredictionSettings, Strategy},
+    priority::{plan_watching, select_watching, Priority},
     pubsub::PubSubMessage,
     store::Store,
     twitch::{
@@ -390,7 +390,7 @@ fn event_badges_come_from_their_streamdatabase_page() {
     // Not for watch time alone, or not filled in yet: no campaign.
     for objectives in [
         json!([[{ "type": "twitch_subscribe", "minutes": null, "days": null }]]),
-        json!([[{ "type": "twitch_watch", "minutes": 15, "days": 3 }]]),
+        json!([[{ "type": "twitch_watch", "minutes": 15, "days": 15 }]]),
         json!([[{ "type": "twitch_watch", "minutes": null, "days": null }]]),
         json!([]),
     ] {
@@ -420,7 +420,7 @@ fn makes_directory_slugs() {
 fn real_streamdatabase_pages() {
     let Ok(dir) = std::env::var("EVENT_PAGES_DIR") else { return };
     for (file, minutes, game) in [("kda.html", 30, "21779"), ("jordan.html", 15, "509672")] {
-        let html = std::fs::read_to_string(format!("{dir}/{file}")).unwrap();
+        let Ok(html) = std::fs::read_to_string(format!("{dir}/{file}")) else { continue };
         let c = Campaign::from_event_badge(&event_badge("x", "X"), &next_data(&html).unwrap()).unwrap();
         assert_eq!((c.drops[0].minutes_required, c.game_id.as_str()), (minutes, game), "{file}");
         println!("{file}: {:?} {} {}", c.allowed_channels, c.game_slug, c.drops[0].minutes_required);
@@ -487,4 +487,346 @@ fn event_badges_use_the_page_window() {
     page["end_at_date"] = Value::Null;
     let c = Campaign::from_event_badge(&badge, &next_data(&event_page(page)).unwrap()).unwrap();
     assert_eq!(c.end_at.to_rfc3339(), "2026-11-15T23:59:59.999+00:00");
+}
+
+#[test]
+fn reads_twitch_progress_for_a_badge_by_name() {
+    // As the inventory lists a drop in progress: Purple Chain, 22 of 60 minutes watched.
+    let inventory = json!({ "dropCampaignsInProgress": [{
+        "id": "gta", "timeBasedDrops": [
+            { "id": "d0", "requiredMinutesWatched": 30, "self": { "currentMinutesWatched": 30, "isClaimed": true },
+              "benefitEdges": [{ "benefit": { "name": "Other" } }] },
+            { "id": "d1", "requiredMinutesWatched": 60, "self": { "currentMinutesWatched": 22, "isClaimed": false },
+              "benefitEdges": [{ "benefit": { "name": "Purple Chain " } }] }
+        ]
+    }]});
+    let progress = |minutes, required, claimed, locked| Some(TwitchProgress { minutes, required, claimed, locked });
+    assert_eq!(inventory_progress(&inventory, "purple chain"), progress(22, 60, false, false));
+    assert_eq!(inventory_progress(&inventory, "Other"), progress(30, 30, true, false));
+    // A drop waiting for its day.
+    let mut locked = inventory.clone();
+    locked["dropCampaignsInProgress"][0]["timeBasedDrops"][1]["self"]["hasPreconditionsMet"] = json!(false);
+    assert_eq!(inventory_progress(&locked, "Purple Chain"), progress(22, 60, false, true));
+    assert_eq!(inventory_progress(&inventory, "K/DA Fan"), None);
+    assert_eq!(inventory_progress(&json!({}), "Purple Chain"), None);
+}
+
+#[test]
+fn streak_streams_back_within_30_minutes_keep_their_state() {
+    let s = live("a");
+    {
+        let mut st = s.state();
+        st.stream.watch_streak_missing = true;
+        st.stream.streak_at_start = Some(4);
+        // Offline 10 minutes ago, before its streak was in.
+        st.offline_at = crate::utils::now() - 600.0;
+        st.prev_streak_missing = true;
+    }
+    assert!(s.streak_missing());
+    // The previous stream had it: the same stream for Twitch, nothing to earn.
+    s.state().prev_streak_missing = false;
+    assert!(!s.streak_missing());
+    // Long enough ago: a new stream.
+    s.state().offline_at = crate::utils::now() - 31.0 * 60.0;
+    assert!(s.streak_missing());
+}
+
+#[test]
+fn a_streak_that_never_comes_gives_up_its_slot() {
+    let s = live("a");
+    {
+        let mut st = s.state();
+        st.stream.watch_streak_missing = true;
+        st.stream.streak_at_start = Some(4);
+        st.stream.minute_watched = STREAK_GIVE_UP_MINUTES - 1.0;
+    }
+    assert!(s.streak_missing());
+    s.state().stream.minute_watched = STREAK_GIVE_UP_MINUTES;
+    assert!(!s.streak_missing());
+}
+
+#[test]
+fn started_streaks_are_finished_first() {
+    let list = [live("a"), live("b"), live("c")];
+    for s in &list {
+        s.state().stream.watch_streak_missing = true;
+    }
+    assert_eq!(names(&select_watching(&list, &[Priority::Streak])), ["a", "b"]);
+    list[2].state().stream.minute_watched = 3.0;
+    assert_eq!(names(&select_watching(&list, &[Priority::Streak])), ["c", "a"]);
+}
+
+/// A streamdatabase list entry, as `initialTwitchGlobalBadges` has them.
+fn sdb_badge(set_id: &str, title: &str, cost: Value, window: Option<(&str, &str, &str, &str)>) -> Value {
+    let mut b = json!({
+        "current": { "set_id": set_id, "version": { "id": "1", "title": title, "image_url_4x": format!("https://static-cdn.jtvnw.net/badges/v1/{set_id}/3") } },
+        "removed": false, "cost": cost,
+    });
+    if let Some((sd, st, ed, et)) = window {
+        for (k, v) in [("start_at_date", sd), ("start_at_time", st), ("end_at_date", ed), ("end_at_time", et)] {
+            b[k] = json!(v);
+        }
+    }
+    b
+}
+
+#[test]
+fn reads_streamdatabase_badge_list() {
+    let page = json!({ "props": { "pageProps": { "initialTwitchGlobalBadges": [
+        sdb_badge("kda-fan", "K/DA Fan", json!("free"), Some(("2026-11-13", "16:00", "2026-11-15", "15:59"))),
+        // Paid, or no window: left out.
+        sdb_badge("gallica", "Gallica", json!("paid"), Some(("2026-11-14", "18:00", "2026-12-12", "17:59"))),
+        sdb_badge("1979-revolution_1", "1979 Revolution", Value::Null, None),
+        sdb_badge("old", "Old", json!("free"), None),
+    ] } } });
+    let list = parse_streamdatabase_list(&page);
+    assert_eq!(list.len(), 1);
+    let kda = &list[0];
+    assert_eq!(kda["id"], "kda-fan");
+    assert_eq!(kda["name"], "K/DA Fan");
+    assert_eq!(kda["free"], true);
+    assert_eq!(kda["startAt"], "2026-11-13T16:00:00+00:00");
+    assert_eq!(kda["endAt"], "2026-11-15T15:59:59+00:00");
+    assert_eq!(kda["streamdatabaseUrl"], "https://www.streamdatabase.com/twitch/global-badges/kda-fan/1");
+    // Read like catquery's list.
+    let events = parse_event_badges(&json!({ "badges": list }), 0.0);
+    assert!(events.contains_key("k/da fan"));
+}
+
+#[test]
+fn badge_lists_merge_without_duplicates() {
+    let catquery = [
+        json!({ "id": "kda-fan", "name": "K/DA Fan", "imageUrl": "", "startAt": "2026-11-13T16:00:00.000Z",
+                "endAt": "2026-11-15T15:59:00.000Z", "free": true,
+                "streamdatabaseUrl": "https://www.streamdatabase.com/twitch/global-badges/kda-fan/1" }),
+        json!({ "id": "clover", "name": "Clover", "free": true }),
+    ];
+    let streamdatabase = [
+        // The same badge: by set id, and one listed under another id with the same title.
+        json!({ "id": "kda-fan", "name": "K/DA Fan", "imageUrl": "https://img/kda", "free": true }),
+        json!({ "id": "clover_2", "name": " clover ", "free": true,
+                "streamdatabaseUrl": "https://www.streamdatabase.com/twitch/global-badges/clover_2/1" }),
+        // Only streamdatabase has it.
+        json!({ "id": "purple-chain", "name": "Purple Chain", "free": true }),
+    ];
+    let merged = merge_badge_lists(&catquery, &streamdatabase);
+    let badges = merged["badges"].as_array().unwrap();
+    let ids: Vec<&str> = badges.iter().map(|b| b["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["kda-fan", "clover", "purple-chain"]);
+    // Catquery's entry wins; its gaps come from streamdatabase's.
+    assert_eq!(badges[0]["startAt"], "2026-11-13T16:00:00.000Z");
+    assert_eq!(badges[0]["imageUrl"], "https://img/kda");
+    assert_eq!(badges[1]["streamdatabaseUrl"], "https://www.streamdatabase.com/twitch/global-badges/clover_2/1");
+    // Either list alone works.
+    assert_eq!(merge_badge_lists(&[], &streamdatabase)["badges"].as_array().unwrap().len(), 3);
+    assert_eq!(merge_badge_lists(&catquery, &[])["badges"].as_array().unwrap().len(), 2);
+}
+
+/// The real list page, when saved to `$SDB_LIST` (an HTML file).
+#[test]
+fn real_streamdatabase_list() {
+    let Ok(path) = std::env::var("SDB_LIST") else { return };
+    let page = next_data(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let list = parse_streamdatabase_list(&page);
+    let kda = list.iter().find(|b| b["id"] == "kda-fan").expect("K/DA Fan is listed");
+    assert_eq!(kda["startAt"], "2026-11-13T16:00:00+00:00");
+    println!("{} free time-limited badges, e.g. {}", list.len(), kda);
+}
+
+// === Watch plan scenarios: badges and watch streaks === //
+
+/// A live channel eligible for the picked badge.
+fn badge_channel(name: &str) -> Arc<Streamer> {
+    let s = live(name);
+    s.state().badge_drop = true;
+    s
+}
+
+/// A live channel whose streak (count `count`) this stream hasn't earned yet.
+fn streak_pending(name: &str, count: u32) -> Arc<Streamer> {
+    let s = live(name);
+    {
+        let mut st = s.state();
+        st.stream.watch_streak_missing = true;
+        st.watch_streak = Some(count);
+        st.stream.streak_at_start = Some(count);
+    }
+    s
+}
+
+const RULES: [Priority; 4] = [Priority::Badges, Priority::Streak, Priority::Prioritized, Priority::Order];
+
+#[test]
+fn a_badge_is_watched_alone() {
+    let list = [live("a"), badge_channel("b"), live("c")];
+    let plan = plan_watching(&list, &RULES, None);
+    assert_eq!(names(&plan.watching), ["b"]);
+    assert!(!plan.streak_break);
+    // Without BADGES in the rules: the normal two.
+    let plan = plan_watching(&list, &[Priority::Order], None);
+    assert_eq!(names(&plan.watching), ["a", "b"]);
+    assert!(plan.badge_channel.is_none());
+}
+
+#[test]
+fn the_focused_badge_channel_keeps_its_slot() {
+    let list = [badge_channel("a"), badge_channel("b")];
+    assert_eq!(names(&plan_watching(&list, &RULES, None).watching), ["a"]);
+    // Watching b already: switching to a would split the progress.
+    assert_eq!(names(&plan_watching(&list, &RULES, Some("b")).watching), ["b"]);
+    // b went offline (no longer a candidate): a.
+    assert_eq!(names(&plan_watching(&list[..1], &RULES, Some("b")).watching), ["a"]);
+}
+
+#[test]
+fn a_streak_at_stake_pauses_the_badge_until_twitch_confirms_it() {
+    let list = [badge_channel("badge"), streak_pending("s1", 40), streak_pending("s2", 12), streak_pending("s3", 3)];
+    let plan = plan_watching(&list, &RULES, Some("badge"));
+    assert!(plan.streak_break);
+    assert_eq!(names(&plan.watching), ["s1", "s2"], "both slots on streaks");
+    assert_eq!(plan.badge_channel.as_ref().map(|s| s.username.as_str()), Some("badge"), "focus kept");
+
+    // s1 and s2 confirmed: s3 next.
+    list[1].state().stream.watch_streak_missing = false;
+    list[2].state().stream.watch_streak_missing = false;
+    assert_eq!(names(&plan_watching(&list, &RULES, Some("badge")).watching), ["s3"]);
+    // All confirmed: the badge alone again.
+    list[3].state().stream.watch_streak_missing = false;
+    let plan = plan_watching(&list, &RULES, Some("badge"));
+    assert!(!plan.streak_break);
+    assert_eq!(names(&plan.watching), ["badge"]);
+}
+
+#[test]
+fn a_streak_that_never_comes_ends_its_break() {
+    let list = [badge_channel("badge"), streak_pending("s1", 40)];
+    assert!(plan_watching(&list, &RULES, Some("badge")).streak_break);
+    // Twitch's count didn't go up in 30 minutes watched: back to the badge.
+    list[1].state().stream.minute_watched = STREAK_GIVE_UP_MINUTES;
+    let plan = plan_watching(&list, &RULES, Some("badge"));
+    assert!(!plan.streak_break);
+    assert_eq!(names(&plan.watching), ["badge"]);
+}
+
+#[test]
+fn no_break_without_a_streak_to_lose() {
+    // No streak yet (count 0 or unknown): nothing to lose, the badge goes on.
+    let fresh = streak_pending("fresh", 0);
+    let unknown = live("unknown");
+    unknown.state().stream.watch_streak_missing = true;
+    let list = [badge_channel("badge"), fresh, unknown];
+    let plan = plan_watching(&list, &RULES, Some("badge"));
+    assert!(!plan.streak_break);
+    assert_eq!(names(&plan.watching), ["badge"]);
+}
+
+#[test]
+fn no_break_without_the_streak_rule_or_for_the_badge_channels_own_streak() {
+    let list = [badge_channel("badge"), streak_pending("s1", 40)];
+    let plan = plan_watching(&list, &[Priority::Badges, Priority::Order], Some("badge"));
+    assert!(!plan.streak_break, "STREAK not in the rules");
+    assert_eq!(names(&plan.watching), ["badge"]);
+
+    // The badge channel needs its own streak: watching it earns both.
+    {
+        let mut st = list[0].state();
+        st.stream.watch_streak_missing = true;
+        st.watch_streak = Some(9);
+        st.stream.streak_at_start = Some(9);
+    }
+    let plan = plan_watching(&list, &RULES, Some("badge"));
+    assert!(!plan.streak_break);
+    assert_eq!(names(&plan.watching), ["badge"]);
+}
+
+#[test]
+fn without_a_badge_streaks_come_first() {
+    let list = [live("a"), streak_pending("s1", 4), live("c")];
+    let plan = plan_watching(&list, &RULES, None);
+    assert_eq!(names(&plan.watching), ["s1", "a"]);
+    assert!(!plan.streak_break);
+}
+
+#[test]
+fn a_busy_day_holds_the_badge_up_for_minutes_not_hours() {
+    // 28 live channels with a streak pending, 8 of them with a streak to lose; each takes 6
+    // minutes until Twitch confirms it. Count the minutes the badge waits.
+    let mut list = vec![badge_channel("badge")];
+    for i in 0..28 {
+        list.push(streak_pending(&format!("s{i}"), if i < 8 { 10 } else { 0 }));
+    }
+    let mut waited = 0;
+    for _minute in 0..240 {
+        let plan = plan_watching(&list, &RULES, Some("badge"));
+        if !plan.streak_break {
+            break;
+        }
+        waited += 1;
+        for s in &plan.watching {
+            let mut st = s.state();
+            st.stream.minute_watched += 1.0;
+            if st.stream.minute_watched >= 6.0 {
+                st.stream.watch_streak_missing = false;
+            }
+        }
+    }
+    // 8 streaks, 2 at a time, 6 minutes each.
+    assert_eq!(waited, 24);
+}
+
+#[test]
+fn time_away_from_a_slot_isnt_counted() {
+    let s = live("a");
+    {
+        let mut st = s.state();
+        st.stream.update_minute_watched();
+        // Lost its slot, then got it back much later.
+        st.stream.pause_minute_watched();
+        let added = st.stream.update_minute_watched();
+        assert_eq!(added, 0.0);
+        assert_eq!(st.stream.minute_watched, 0.0);
+    }
+}
+
+#[test]
+fn badges_on_several_days_keep_their_days() {
+    let goal = |objectives: Value| {
+        let page = next_data(&event_page(json!({ "objectives": objectives, "categories": [], "channels": null }))).unwrap();
+        Campaign::from_event_badge(&event_badge("x", "X"), &page).map(|c| (c.drops[0].minutes_required, c.drops[0].days_required))
+    };
+    // GTA VI's chains: Purple 60 minutes on 1 day, Bronze on 2, ... Miami on 6.
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 60, "days": 1 }]])), Some((60, 1)));
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 60, "days": 2 }]])), Some((60, 2)));
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 60, "days": 6 }]])), Some((60, 6)));
+    // No days, or 0: one.
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 30, "days": null }]])), Some((30, 1)));
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 30, "days": 0 }]])), Some((30, 1)));
+    // Fewest days first, then fewest minutes.
+    assert_eq!(
+        goal(json!([
+            [{ "type": "twitch_watch", "minutes": 30, "days": 3 }],
+            [{ "type": "twitch_watch", "minutes": 120, "days": 1 }],
+            [{ "type": "twitch_watch", "minutes": 90, "days": 1 }]
+        ])),
+        Some((90, 1))
+    );
+    // Too many days, or watching plus something else: left out.
+    assert_eq!(goal(json!([[{ "type": "twitch_watch", "minutes": 60, "days": 30 }]])), None);
+    assert_eq!(
+        goal(json!([[{ "type": "twitch_watch", "minutes": 60, "days": 2 }, { "type": "twitch_subscribe", "minutes": null, "days": null }]])),
+        None
+    );
+}
+
+/// The real chain pages, when saved to `$EVENT_PAGES_DIR` (bronze-chain.html, miami-chain.html).
+#[test]
+fn real_chain_pages() {
+    let Ok(dir) = std::env::var("EVENT_PAGES_DIR") else { return };
+    for (file, days) in [("bronze-chain.html", 2), ("miami-chain.html", 6)] {
+        let Ok(html) = std::fs::read_to_string(format!("{dir}/{file}")) else { continue };
+        let page = next_data(&html).unwrap();
+        let badge = json!({ "id": "x", "name": "X", "startAt": "2026-11-18T11:00:00.000Z", "endAt": "2026-12-01T07:59:00.000Z" });
+        let c = Campaign::from_event_badge(&badge, &page).unwrap();
+        assert_eq!((c.drops[0].minutes_required, c.drops[0].days_required, c.game_id.as_str()), (60, days, "1867279146"), "{file}");
+    }
 }
